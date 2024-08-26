@@ -47,7 +47,8 @@ live_design! {
     ICO_ADD = dep("crate://self/resources/icon_add.svg")
     ICO_CLOSE = dep("crate://self/resources/icons/close.svg")
     ICO_JUMP_TO_BOTTOM = dep("crate://self/resources/icon_jump_to_bottom.svg")
-
+    IMG_SEEN = dep("crate://self/resources/img/seen.png")
+    IMG_NOT_SEEN = dep("crate://self/resources/img/not_seen.png")
     TEXT_SUB = {
         font_size: (10),
         font: {path: dep("crate://makepad-widgets/resources/GoNotoKurrent-Regular.ttf")}
@@ -247,7 +248,14 @@ live_design! {
             }
         }
     }
-
+    ImageViewer = <View>{
+        Img = <Image> {
+            source: (IMG_SEEN)
+            margin: 0,
+            width: 50.,
+            height: 50.
+        }
+    }
     // A view that shows action buttons for a message,
     // with buttons for sending a reply (and in the future, reactions).
     MessageMenu = <RoundedView> {
@@ -261,7 +269,13 @@ live_design! {
             border_color: #000,
             radius: 2
         }
-
+        seen_icon = <ImageViewer>{}
+        not_seen = <Image>{
+            source: (IMG_NOT_SEEN)
+            margin: 0,
+            width: 50.,
+            height: 50.
+        }
         reply_button = <IconButton> {
             visible: false
             width: Fit,
