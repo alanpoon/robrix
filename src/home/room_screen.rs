@@ -17,7 +17,7 @@ use matrix_sdk::{
     OwnedServerName,
 };
 use matrix_sdk_ui::timeline::{
-    self, EventTimelineItem, InReplyToDetails, MemberProfileChange, Profile, RepliedToInfo, RoomMembershipChange, TimelineDetails, TimelineItem, TimelineItemContent, TimelineItemKind, VirtualTimelineItem
+    self, EventTimelineItem, InReplyToDetails, MemberProfileChange, Profile, ReactionsByKeyBySender, RepliedToInfo, RoomMembershipChange, TimelineDetails, TimelineItem, TimelineItemContent, TimelineItemKind, VirtualTimelineItem
 };
 use robius_location::Coordinates;
 
@@ -32,7 +32,7 @@ use crate::{
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
 use rangemap::RangeSet;
 
-use super::loading_modal::{LoadingModalAction, LoadingModalState};
+use super::{event_reaction_list::draw_reaction_buttons, loading_modal::{LoadingModalAction, LoadingModalState}};
 
 const GEO_URI_SCHEME: &str = "geo:";
 
@@ -383,6 +383,7 @@ live_design! {
                 height: 1
             }
         }
+        reaction_button_template: <ReactionButton> {}
     }
 
     // The view used for a condensed message that came right after another message
@@ -1031,6 +1032,8 @@ pub struct RoomScreen {
     #[rust] room_name: String,
     /// The persistent UI-relevant states for the room that this widget is currently displaying.
     #[rust] tl_state: Option<TimelineUiState>,
+    /// Template of reaction_button
+    #[live] reaction_button_template: Option<LivePtr>,
 }
 
 impl Drop for RoomScreen {
@@ -1410,6 +1413,7 @@ impl Widget for RoomScreen {
                                     &mut tl_state.media_cache,
                                     item_drawn_status,
                                     room_screen_widget_uid,
+                                    self.reaction_button_template.clone(),
                                 )
                             }
                             TimelineItemContent::Sticker(sticker) => {
@@ -1425,6 +1429,7 @@ impl Widget for RoomScreen {
                                     &mut tl_state.media_cache,
                                     item_drawn_status,
                                     room_screen_widget_uid,
+                                    self.reaction_button_template.clone(),
                                 )
                             }
                             TimelineItemContent::RedactedMessage => populate_small_state_event(
@@ -2663,7 +2668,8 @@ fn populate_message_view(
     prev_event: Option<&Arc<TimelineItem>>,
     media_cache: &mut MediaCache,
     item_drawn_status: ItemDrawnStatus,
-    room_screen_widget_uid: WidgetUid
+    room_screen_widget_uid: WidgetUid,
+    reaction_button_template: Option<LivePtr>
 ) -> (WidgetRef, ItemDrawnStatus) {
     let mut new_drawn_status = item_drawn_status;
 
@@ -2970,8 +2976,8 @@ fn populate_message_view(
 
     // If we didn't use a cached item, we need to draw all other message content: the reply preview and reactions.
     if !used_cached_item {
-        item.reaction_list(id!(content.reaction_list))
-            .set_list2(cx, event_tl_item.reactions(), room_id.to_owned(), event_tl_item.identifier());
+        // item.reaction_list(id!(content.reaction_list))
+        //     .set_list2(cx, event_tl_item.reactions(), room_id.to_owned(), event_tl_item.identifier());
         let (is_reply_fully_drawn, replied_to_ev_id) = draw_replied_to_message(
             cx,
             &item.view(id!(replied_to_message)),
@@ -3049,7 +3055,9 @@ fn populate_message_view(
         match message {
             MessageOrSticker::Message(msg) => does_message_mention_current_user(msg),
             MessageOrSticker::Sticker(_) => false, // Stickers can't mention users.
-        }
+        },
+        room_id.clone(),
+        event_tl_item.reactions().clone()
     );
 
     // Set the timestamp.
@@ -3905,7 +3913,10 @@ pub struct Message {
     #[rust] item_id: usize,
     /// The event ID of the message that this message is replying to, if any.
     #[rust] replied_to_event_id: Option<OwnedEventId>,
-    #[rust] room_screen_widget_uid: Option<WidgetUid>
+    #[rust] room_screen_widget_uid: Option<WidgetUid>,
+    #[rust] room_id: Option<OwnedRoomId>,
+    #[live] reaction_button_template: Option<LivePtr>,
+    #[rust] reactions_by_key_by_sender: Option<ReactionsByKeyBySender>
 }
 
 impl Widget for Message {
@@ -3997,7 +4008,11 @@ impl Widget for Message {
             .button(id!(reply_button))
             .set_visible(self.can_be_replied_to);
 
-        self.view.draw_walk(cx, scope, walk)
+        self.view.draw_walk(cx, scope, walk);
+        let (Some(room_id), Some(reactions_by_key_by_sender)) = (&self.room_id, &self.reactions_by_key_by_sender) else { return DrawStep::done() };
+        draw_reaction_buttons(cx, self.reaction_button_template, room_id,  &reactions_by_key_by_sender);
+
+        DrawStep::done()
     }
 }
 
@@ -4008,13 +4023,17 @@ impl Message {
         item_id: usize,
         replied_to_event_id: Option<OwnedEventId>,
         room_screen_widget_uid: WidgetUid,
-        mentions_user: bool
+        mentions_user: bool,
+        room_id: OwnedRoomId,
+        reactions_by_key_by_sender: ReactionsByKeyBySender,
     ) {
         self.can_be_replied_to = can_be_replied_to;
         self.item_id = item_id;
         self.replied_to_event_id = replied_to_event_id;
         self.room_screen_widget_uid = Some(room_screen_widget_uid);
         self.mentions_user = mentions_user;
+        self.reactions_by_key_by_sender = Some(reactions_by_key_by_sender);
+        self.room_id = Some(room_id);
     }
 }
 
@@ -4025,10 +4044,12 @@ impl MessageRef {
         item_id: usize,
         replied_to_event_id: Option<OwnedEventId>,
         room_screen_widget_uid: WidgetUid,
-        mentions_user: bool
+        mentions_user: bool,
+        room_id: OwnedRoomId,
+        reactions_by_key_by_sender: ReactionsByKeyBySender,
     ) {
         if let Some(mut inner) = self.borrow_mut() {
-            inner.set_data(can_be_replied_to, item_id, replied_to_event_id, room_screen_widget_uid, mentions_user);
+            inner.set_data(can_be_replied_to, item_id, replied_to_event_id, room_screen_widget_uid, mentions_user, room_id, reactions_by_key_by_sender);
         };
     }
 }
