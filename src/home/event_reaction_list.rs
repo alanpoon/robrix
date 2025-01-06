@@ -1,4 +1,4 @@
-use crate::sliding_sync::{get_client, submit_async_request, MatrixRequest};
+use crate::sliding_sync::{current_user_id, get_client, submit_async_request, MatrixRequest};
 use crate::utils::human_readable_list;
 use makepad_widgets::*;
 use matrix_sdk::ruma::OwnedRoomId;
@@ -33,9 +33,9 @@ live_design! {
             margin: { top: 3, bottom: 3, left: 3, right: 3 },
             draw_bg: {
                 instance color: (COLOR_BUTTON_GREY)
-                instance color_hover: (#fef65b)
+                instance color_hover: #fef65b
                 instance border_width: 1.5
-                instance border_color: (#001A11)
+                instance border_color: #001A11
                 instance radius: 3.0
                 fn get_color(self) -> vec4 {
                     return mix(self.color, mix(self.color, self.color_hover, 0.2), self.hover)
@@ -87,7 +87,7 @@ pub struct ReactionList {
     #[live]
     item: Option<LivePtr>,
     #[rust]
-    children: ComponentMap<LiveId, ButtonRef>,
+    children: ComponentMap<LiveId, (ButtonRef, ReactionData)>,
     #[layout]
     layout: Layout,
     #[walk]
@@ -108,12 +108,7 @@ pub struct ReactionList {
 impl Widget for ReactionList {
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
         cx.begin_turtle(walk, self.layout);
-        for (index, reaction_data) in
-            self.event_reaction_list.iter().enumerate()
-        {
-            let target = self.children.get_or_insert(cx, LiveId(index as u64), |cx| {
-                WidgetRef::new_from_ptr(cx, self.item).as_button()
-            });
+        for (_, (target, reaction_data)) in self.children.iter_mut() {
             target.set_text(&format!("{} {}", reaction_data.emoji, reaction_data.total_num_react));
             // Renders Green button for reaction that includes the client user.
             // Renders Grey button for reaction that does not include client user.
@@ -125,94 +120,94 @@ impl Widget for ReactionList {
             target.apply_over(cx, live! {
                 draw_bg: { color: (bg_color) }
             });
-            let _ = target.draw(cx, scope);                
+            let _ = target.draw(cx, scope);       
         }
         
         cx.end_turtle();
-        self.children.retain_visible();
+        //self.children.retain_visible();
         DrawStep::done()
     }
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
-        let Some(room_id) = &self.room_id else { return };
-        let Some(timeline_event_id) = &self.timeline_event_id else {
-            return;
-        };
-        // Apply mouse-in tooltip effect on the reaction buttons.
-        // Currently handling mouse-in effect using "event.hits(cx, widget_ref.area())" does not work.
-        if let Event::MouseMove(e) = event {
-            let uid = self.widget_uid();
-            if self.tooltip_state.is_none() {
-                for (id, widget_ref) in self.children.iter() {
-                    // Widget.handle_event here does not cause the button to be highlighted when mouse over.
-                    // To make the button highlighted when mouse over, the iteration over the children needs to be done 
-                    // outside Event::MouseMove.
-                    let widget_rect = widget_ref.area().rect(cx);
-                    if widget_rect.contains(e.abs) {
-                        if let Some(reaction_data) = self.event_reaction_list.get(id.0 as usize) {
-                            let tooltip_pos =  DVec2 {
-                                x: widget_rect.pos.x + widget_rect.size.x,
-                                y: widget_rect.pos.y - widget_rect.size.y / 2.0
-                            };
-                            // Stores the event_reaction_list index together with the tooltip area and tooltip text into tooltip state.
-                            // The index will be used later to reset the tooltip state if the mouse leaves this particular reaction
-                            // button.
-                            self.tooltip_state = Some((id.0, RoomScreenTooltipActions::HoverIn {
-                                tooltip_pos, 
-                                tooltip_text: reaction_data.tooltip_text.clone(), 
-                                tooltip_width: TOOLTIP_WIDTH, 
-                                callout_y_offset: (widget_rect.size.y - 5.0) / 2.0 + 10.0
-                            }));
-                        }
-                    }
-                }
-            } else {
-                let mut reset_tooltip_state = false;
-                if let Some((ref index, tooltip_actions)) = &self.tooltip_state {
-                    self.children
-                    .iter()
-                    .for_each(|(id, widget_ref)| {
-                        // Search for the children with the same index as the tooltip state
-                        // and check if the mouse leaves this particular reaction button.
-                        // If so, post a HoverOut action to make the tooltip disappear.
-                        if id.0 != *index {
-                            return;
-                        }
-                        if !widget_ref.area().rect(cx).contains(e.abs) {
-                            if self.event_reaction_list.get(id.0 as usize).is_some() {
-                                reset_tooltip_state = true;
-                                cx.widget_action(uid, &scope.path, RoomScreenTooltipActions::HoverOut);
-                            }
-                        }
-                    });
-                    // If the mouse does not leave this particular reaction button, propagate tooltip actions.
-                    if !reset_tooltip_state {
-                        cx.widget_action(uid, &scope.path, tooltip_actions.clone());
-                    }
-                }
-                if reset_tooltip_state {
-                    self.tooltip_state = None;
-                }
-            } 
-        }
-        if let Event::Actions(actions) = event {
-            self.children
-            .iter()
-            .for_each(|(_id, widget_ref)| {
-                if widget_ref.clicked(actions) {
-                    let text = widget_ref.text();
-                    let reaction_string = text.rsplit_once(' ')
-                    .map(|(prefix, _)| prefix)
-                    .unwrap_or(&text);
-                    if let Some(key) = emojis::get_by_shortcode(reaction_string) {
-                        submit_async_request(MatrixRequest::ToggleReaction {
-                            room_id: room_id.clone(),
-                            timeline_event_id: timeline_event_id.clone(),
-                            reaction: key.as_str().to_string(),
-                        });
-                    }
-                }
-            });
-        }
+        // let Some(room_id) = &self.room_id else { return };
+        // let Some(timeline_event_id) = &self.timeline_event_id else {
+        //     return;
+        // };
+        // // Apply mouse-in tooltip effect on the reaction buttons.
+        // // Currently handling mouse-in effect using "event.hits(cx, widget_ref.area())" does not work.
+        // if let Event::MouseMove(e) = event {
+        //     let uid = self.widget_uid();
+        //     if self.tooltip_state.is_none() {
+        //         for (id, widget_ref) in self.children.iter() {
+        //             // Widget.handle_event here does not cause the button to be highlighted when mouse over.
+        //             // To make the button highlighted when mouse over, the iteration over the children needs to be done 
+        //             // outside Event::MouseMove.
+        //             let widget_rect = widget_ref.area().rect(cx);
+        //             if widget_rect.contains(e.abs) {
+        //                 if let Some(reaction_data) = self.event_reaction_list.get(id.0 as usize) {
+        //                     let tooltip_pos =  DVec2 {
+        //                         x: widget_rect.pos.x + widget_rect.size.x,
+        //                         y: widget_rect.pos.y - widget_rect.size.y / 2.0
+        //                     };
+        //                     // Stores the event_reaction_list index together with the tooltip area and tooltip text into tooltip state.
+        //                     // The index will be used later to reset the tooltip state if the mouse leaves this particular reaction
+        //                     // button.
+        //                     self.tooltip_state = Some((id.0, RoomScreenTooltipActions::HoverIn {
+        //                         tooltip_pos, 
+        //                         tooltip_text: reaction_data.tooltip_text.clone(), 
+        //                         tooltip_width: TOOLTIP_WIDTH, 
+        //                         callout_y_offset: (widget_rect.size.y - 5.0) / 2.0 + 10.0
+        //                     }));
+        //                 }
+        //             }
+        //         }
+        //     } else {
+        //         let mut reset_tooltip_state = false;
+        //         if let Some((ref index, tooltip_actions)) = &self.tooltip_state {
+        //             self.children
+        //             .iter()
+        //             .for_each(|(id, widget_ref)| {
+        //                 // Search for the children with the same index as the tooltip state
+        //                 // and check if the mouse leaves this particular reaction button.
+        //                 // If so, post a HoverOut action to make the tooltip disappear.
+        //                 if id.0 != *index {
+        //                     return;
+        //                 }
+        //                 if !widget_ref.area().rect(cx).contains(e.abs) {
+        //                     if self.event_reaction_list.get(id.0 as usize).is_some() {
+        //                         reset_tooltip_state = true;
+        //                         cx.widget_action(uid, &scope.path, RoomScreenTooltipActions::HoverOut);
+        //                     }
+        //                 }
+        //             });
+        //             // If the mouse does not leave this particular reaction button, propagate tooltip actions.
+        //             if !reset_tooltip_state {
+        //                 cx.widget_action(uid, &scope.path, tooltip_actions.clone());
+        //             }
+        //         }
+        //         if reset_tooltip_state {
+        //             self.tooltip_state = None;
+        //         }
+        //     } 
+        // }
+        // if let Event::Actions(actions) = event {
+        //     self.children
+        //     .iter()
+        //     .for_each(|(_id, widget_ref)| {
+        //         if widget_ref.clicked(actions) {
+        //             let text = widget_ref.text();
+        //             let reaction_string = text.rsplit_once(' ')
+        //             .map(|(prefix, _)| prefix)
+        //             .unwrap_or(&text);
+        //             if let Some(key) = emojis::get_by_shortcode(reaction_string) {
+        //                 submit_async_request(MatrixRequest::ToggleReaction {
+        //                     room_id: room_id.clone(),
+        //                     timeline_event_id: timeline_event_id.clone(),
+        //                     reaction: key.as_str().to_string(),
+        //                 });
+        //             }
+        //         }
+        //     });
+        // }
         
         
     }    
@@ -239,51 +234,101 @@ impl ReactionListRef {
         timeline_event_item_id: TimelineEventItemId,
     ) {
         let Some(client_user_id) = get_client().and_then(|c| c.user_id().map(|user_id| user_id.to_owned()) ) else { return };
-        let Some(mut instance) = self.borrow_mut() else { return };
-            instance.event_reaction_list = Vec::with_capacity(event_tl_item_reactions.len());
-            for (reaction_raw, reaction_senders) in event_tl_item_reactions.iter() {
-                // Just take the first char of the emoji, which ignores any variant selectors.
-                let reaction_str_option = reaction_raw.chars().next().map(|c| c.to_string());
-                let reaction_str = reaction_str_option.as_deref().unwrap_or(reaction_raw);
-                let emoji_text = emojis::get(reaction_str)
-                    .and_then(|e| e.shortcode())
-                    .unwrap_or_else(|| {
-                        log!("Failed to parse emoji: {}", reaction_raw);
-                        reaction_raw
-                    });
-                let total_num_react = reaction_senders.len();
-                let mut includes_user = false;
-                let mut user_id_list = Vec::with_capacity(5);
-                for (index, (sender, _react_info)) in reaction_senders.iter().enumerate() {
-                    if sender == &client_user_id {
-                        includes_user = true;
-                    }
-                    if index < 5 {
-                        user_id_list.push(sender.clone());
-                    }
-                }
-                let tooltip_text_arr:Vec<String> = reaction_senders.iter().map(|(sender, _react_info)|{
-                    if sender == &client_user_id {
-                        includes_user = true;
-                    }
-                    get_user_profile_and_room_member(cx, sender.clone(), &room_id, true).0
-                        .map(|user_profile| user_profile.displayable_name().to_string())
-                        .unwrap_or(sender.to_string())
-                }).collect();
-               let mut tooltip_text = human_readable_list(&tooltip_text_arr);                
-                tooltip_text.push_str(&format!("\nreacted with: {}", emoji_text));
-                instance.event_reaction_list.push(ReactionData{
-                    emoji: emoji_text.to_string(),
-                    total_num_react,
-                    tooltip_text,
-                    includes_user,
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.event_reaction_list = Vec::with_capacity(event_tl_item_reactions.len());
+        for (reaction_raw, reaction_senders) in event_tl_item_reactions.iter() {
+            // Just take the first char of the emoji, which ignores any variant selectors.
+            let reaction_str_option = reaction_raw.chars().next().map(|c| c.to_string());
+            let reaction_str = reaction_str_option.as_deref().unwrap_or(reaction_raw);
+            let emoji_text = emojis::get(reaction_str)
+                .and_then(|e| e.shortcode())
+                .unwrap_or_else(|| {
+                    log!("Failed to parse emoji: {}", reaction_raw);
+                    reaction_raw
                 });
+            let total_num_react = reaction_senders.len();
+            let mut includes_user = false;
+            let mut user_id_list = Vec::with_capacity(5);
+            for (index, (sender, _react_info)) in reaction_senders.iter().enumerate() {
+                if sender == &client_user_id {
+                    includes_user = true;
+                }
+                if index < 5 {
+                    user_id_list.push(sender.clone());
+                }
             }
-            instance.room_id = Some(room_id);
-            instance.timeline_event_id = Some(timeline_event_item_id);
+            let tooltip_text_arr:Vec<String> = reaction_senders.iter().map(|(sender, _react_info)|{
+                if sender == &client_user_id {
+                    includes_user = true;
+                }
+                get_user_profile_and_room_member(cx, sender.clone(), &room_id, true).0
+                    .map(|user_profile| user_profile.displayable_name().to_string())
+                    .unwrap_or(sender.to_string())
+            }).collect();
+            let mut tooltip_text = human_readable_list(&tooltip_text_arr);                
+            tooltip_text.push_str(&format!("\nreacted with: {}", emoji_text));
+            inner.event_reaction_list.push(ReactionData{
+                emoji: emoji_text.to_string(),
+                total_num_react,
+                tooltip_text,
+                includes_user,
+            });
         }
+        inner.room_id = Some(room_id);
+        inner.timeline_event_id = Some(timeline_event_item_id);
     }
-
+    
+    pub fn set_list2(
+        &mut self, 
+        cx: &mut Cx,
+        event_tl_item_reactions: &ReactionsByKeyBySender,
+        room_id: OwnedRoomId,
+        timeline_event_item_id: TimelineEventItemId
+    ) {
+        let Some(client_user_id) = current_user_id() else { return };
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.children.clear();
+        for (index, (reaction_raw, reaction_senders)) in event_tl_item_reactions.iter().enumerate() {
+            let total_num_react = reaction_senders.len();
+            let mut includes_user = false;
+            let mut user_id_list = Vec::with_capacity(5);
+            for (index, (sender, _react_info)) in reaction_senders.iter().enumerate() {
+                if sender == &client_user_id {
+                    includes_user = true;
+                }
+                if index < 5 {
+                    user_id_list.push(sender.clone());
+                }
+            }
+            let reaction_str_option = reaction_raw.chars().next().map(|c| c.to_string());
+            let reaction_str = reaction_str_option.as_deref().unwrap_or(reaction_raw);
+            let emoji_text = emojis::get(reaction_str)
+                .and_then(|e| e.shortcode())
+                .unwrap_or_else(|| {
+                    log!("Failed to parse emoji: {}", reaction_raw);
+                    reaction_raw
+                });
+            let tooltip_text_arr:Vec<String> = reaction_senders.iter().map(|(sender, _react_info)|{
+                if sender == &client_user_id {
+                    includes_user = true;
+                }
+                get_user_profile_and_room_member(cx, sender.clone(), &room_id, true).0
+                    .map(|user_profile| user_profile.displayable_name().to_string())
+                    .unwrap_or(sender.to_string())
+            }).collect();
+            let mut tooltip_text = human_readable_list(&tooltip_text_arr);                
+            tooltip_text.push_str(&format!("\nreacted with: {}", emoji_text));
+            let reaction_data = ReactionData {
+                emoji: emoji_text.to_string(),
+                total_num_react,
+                tooltip_text,
+                includes_user,
+            };
+            let button = WidgetRef::new_from_ptr(cx, inner.item).as_button();
+            inner.children.insert( LiveId(index as u64), (button, reaction_data));
+        }
+        inner.timeline_event_id = Some(timeline_event_item_id);
+    }
     /// Handles hover in action and returns the appropriate `RoomScreenTooltipActions`.
     /// 
     /// This function checks if there is a widget action associated with the current
