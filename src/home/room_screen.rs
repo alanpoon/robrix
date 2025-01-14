@@ -3998,7 +3998,8 @@ pub struct Message {
     #[rust] item_id: usize,
     /// The event ID of the message that this message is replying to, if any.
     #[rust] replied_to_event_id: Option<OwnedEventId>,
-    #[rust] room_screen_widget_uid: Option<WidgetUid>
+    #[rust] room_screen_widget_uid: Option<WidgetUid>,
+    #[live] draw_bg: DrawQuad,
 }
 
 impl Widget for Message {
@@ -4070,7 +4071,13 @@ impl Widget for Message {
                 }
             }
         }
-        
+        cx.fingers.sweep_lock(self.draw_bg.area());
+        self.view.handle_event(cx, event, scope);
+        cx.fingers.sweep_unlock(self.draw_bg.area());
+        if let Hit::FingerUp(fe) = event.hits(cx, self.view(id!(body)).area()) {
+            println!("finger up");
+
+        }
         if let Hit::FingerUp(fe) = event.hits(cx, self.view(id!(replied_to_message)).area()) {
             if fe.was_tap() {
                 if let Some(ref replied_to_event) = self.replied_to_event_id {
@@ -4134,7 +4141,7 @@ impl Widget for Message {
             }
         }
 
-        self.view.handle_event(cx, event, scope);
+        
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
