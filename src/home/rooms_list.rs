@@ -510,8 +510,11 @@ impl Widget for RoomsList {
                                 // if the room is not direct while should display, we count it as a not_direct room.
                                 if !is_direct {
                                     self.not_direct_rooms_count += 1;
+                                    self.displayed_rooms.insert(self.not_direct_rooms_count - 1, room_id);
+
+                                } else {
+                                    self.displayed_rooms.push(room_id);
                                 }
-                                self.displayed_rooms.push(room_id);
                             }
                         }
                         self.update_status_rooms_count();
@@ -542,6 +545,7 @@ impl Widget for RoomsList {
                     }
                     RoomsListUpdate::UpdateRoomName { room_id, new_room_name } => {
                         if let Some(room) = self.all_rooms.get_mut(&room_id) {
+                            let is_direct = room.is_direct;
                             let was_displayed = (self.display_filter)(room);
                             room.room_name = Some(new_room_name);
                             let should_display = (self.display_filter)(room);
@@ -555,7 +559,13 @@ impl Widget for RoomsList {
                                 }
                                 (false, true) => {
                                     // Room was not displayed but should now be displayed.
-                                    self.displayed_rooms.push(room_id);
+                                    if !is_direct {
+                                        self.not_direct_rooms_count += 1;
+                                        self.displayed_rooms.insert(self.not_direct_rooms_count - 1, room_id);
+    
+                                    } else {
+                                        self.displayed_rooms.push(room_id);
+                                    }
                                 }
                             }
                         } else {
@@ -565,9 +575,12 @@ impl Widget for RoomsList {
                     RoomsListUpdate::RemoveRoom(room_id) => {
                         self.all_rooms
                             .remove(&room_id)
-                            .and_then(|_removed|
+                            .and_then(|removed| {
+                                if !removed.is_direct {
+                                    self.not_direct_rooms_count -= 1;
+                                }
                                 self.displayed_rooms.iter().position(|r| r == &room_id)
-                            )
+                            })
                             .map(|index_to_remove| {
                                 // Remove the room from the list of displayed rooms.
                                 self.displayed_rooms.remove(index_to_remove);
@@ -589,6 +602,7 @@ impl Widget for RoomsList {
                     RoomsListUpdate::ClearRooms => {
                         self.all_rooms.clear();
                         self.displayed_rooms.clear();
+                        self.not_direct_rooms_count = 0;
                         self.update_status_rooms_count();
                     }
                     RoomsListUpdate::NotLoaded => {
