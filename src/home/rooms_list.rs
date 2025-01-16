@@ -79,6 +79,18 @@ live_design! {
                 height: 100.0,
             }
         }
+        header_template: <Label> {
+            width: Fill,
+            height: Fit,
+            align: {x: 0.0, y: 0.5},
+            padding: {left: 5.0}
+            draw_text: {
+                wrap: Word,
+                color: (MESSAGE_TEXT_COLOR),
+                text_style: <MESSAGE_TEXT_STYLE>{},
+            }
+            text: "Rooms"
+        }
     }
 }
 
@@ -445,8 +457,18 @@ pub struct RoomsList {
     #[rust] max_known_rooms: Option<u32>,
     /// The count of rooms that are not direct.
     #[rust] not_direct_rooms_count: usize,
+    /// Label Template for header for groups in the room list
+    #[live] header_template: Option<LivePtr>
 }
-
+/// Represents the state of the header in the rooms list.
+pub enum DrawRoomListHeader {
+    /// The header "Room" has not been drawn yet
+    HaveNotDrawnRoom,
+    /// The header "People" has not been drawn yet
+    HaveNotDrawnPeople,
+    /// Finish drawing all headers
+    Done
+}
 impl RoomsList {
     /// Updates the status message to show how many rooms have been loaded.
     fn update_status_rooms_count(&mut self) {
@@ -644,125 +666,84 @@ impl Widget for RoomsList {
             self.current_active_room_index = None;
         }
 
+        let header = WidgetRef::new_from_ptr(cx, self.header_template).as_label();
+        
         let count = self.displayed_rooms.len();
 
-        // There are 5 extra items: two headers: `People` and `Rooms`,
-        // one `<Blank>` at the end of header `Rooms`,
-        // one `bottom_filler` at the second from the bottom of the list,
-        // and one `<StatusLabel>` at the bottom of the list.
-        //
-        // And some specially common items: `<Empty>`, their count is equal to `self.not_direct_rooms_count`.
-        // `count + self.not_direct_rooms_count + 5` is total, we minus one as index.
-        let list_end_index = count + self.not_direct_rooms_count + 4;
-        // Minus one as index.
-        let status_label_id = list_end_index - 1;
-
+        let status_label_id = count;
+        let mut draw_header_status = DrawRoomListHeader::HaveNotDrawnRoom;
         // Start the actual drawing procedure.
         while let Some(list_item) = self.view.draw_walk(cx, scope, walk).step() {
             // We only care about drawing the portal list.
             let portal_list_ref = list_item.as_portal_list();
             let Some(mut list) = portal_list_ref.borrow_mut() else { continue };
 
-            list.set_item_range(cx, 0, list_end_index);
+            list.set_item_range(cx, 0, count + 1);
 
-            let mut not_direct_rooms_id = Vec::new();
-            let mut add_people_header_or_not = true;
-            let mut add_blank_or_not = true;
 
             while let Some(item_id) = list.next_visible_item(cx) {
-                log!("item_id: {item_id}");
+                
                 let mut scope = Scope::empty();
-
-                if item_id == 0 {
-                    let item = list.item(cx, 0, live_id!(rooms_or_people_label));
-                    item.set_text("People");
-                    item.draw_all(cx, &mut scope);
-                    continue;
-                }
-
-                // We get `OwnedRoomId` via index `item_id - 1` because the first item is the `People` header.
-                let displayed_room_index = item_id - 1;
 
                 // Draw the room preview for each room in the `displayed_rooms` list.
                 let room_to_draw = self.displayed_rooms
-                    .get(displayed_room_index)
+                    .get(item_id)
                     .and_then(|room_id| self.all_rooms.get_mut(room_id));
-                let item =
-                    if let Some(room_info) = room_to_draw {
-                        if room_info.is_direct {
-                            let item = list.item(cx, item_id, live_id!(room_preview));
-                            self.displayed_rooms_map.insert(item.widget_uid(), displayed_room_index);
-                            room_info.is_selected = self.current_active_room_index == Some(displayed_room_index);
+                let item = if let Some(room_info) = room_to_draw {
+                    let item = list.item(cx, item_id, live_id!(room_preview));
+                    self.displayed_rooms_map.insert(item.widget_uid(), item_id);
+                    room_info.is_selected = self.current_active_room_index == Some(item_id);
+                    
+                    // Paginate the room if it hasn't been paginated yet.
+                    if PREPAGINATE_VISIBLE_ROOMS && !room_info.has_been_paginated {
+                        room_info.has_been_paginated = true;
+                        submit_async_request(MatrixRequest::PaginateRoomTimeline {
+                            room_id: room_info.room_id.clone(),
+                            num_events: 50,
+                            direction: PaginationDirection::Backwards,
+                        });
+                    }
 
-                            // Paginate the room if it hasn't been paginated yet.
-                            if PREPAGINATE_VISIBLE_ROOMS && !room_info.has_been_paginated {
-                                room_info.has_been_paginated = true;
-                                submit_async_request(MatrixRequest::PaginateRoomTimeline {
-                                    room_id: room_info.room_id.clone(),
-                                    num_events: 50,
-                                    direction: PaginationDirection::Backwards,
-                                });
+                    // Pass the room info down to the RoomPreview widget via Scope.
+                    scope = Scope::with_props(&*room_info);
+                    match draw_header_status {
+                        DrawRoomListHeader::HaveNotDrawnPeople => {
+                            if room_info.is_direct {
+                                header.set_text("People");
+                                header.draw_all(cx, &mut scope);
+                                draw_header_status = DrawRoomListHeader::Done;
                             }
-
-                            // Pass the room info down to the RoomPreview widget via Scope.
-                            scope = Scope::with_props(&*room_info);
-                            item
-                        } else {
-                            not_direct_rooms_id.push((room_info.room_id.clone(), displayed_room_index));
-                            list.item(cx, item_id, live_id!(empty))
+                        }
+                        DrawRoomListHeader::HaveNotDrawnRoom => {
+                            if !room_info.is_direct {
+                                header.set_text("Rooms");
+                                header.draw_all(cx, &mut scope);
+                                draw_header_status = DrawRoomListHeader::HaveNotDrawnPeople
+                            }
+                        }
+                        DrawRoomListHeader::Done => {
+                            
                         }
                     }
-                    else if add_blank_or_not {
-                        add_blank_or_not = false;
-                        list.item(cx, item_id, live_id!(blank))
-                    }
-                    else if add_people_header_or_not {
-                        add_people_header_or_not = false;
-                        let item =  list.item(cx, item_id, live_id!(rooms_or_people_label));
-                        item.set_text("Rooms");
-                        item
-                    }
-                    else if let Some((room_id, displayed_room_index)) = not_direct_rooms_id.pop() {
-                        if let Some(room_info) = self.all_rooms.get_mut(&room_id) {
-                           let item = list.item(cx, item_id, live_id!(room_preview));
-                           self.displayed_rooms_map.insert(item.widget_uid(), displayed_room_index);
-                           room_info.is_selected = self.current_active_room_index == Some(displayed_room_index);
-
-                           // Paginate the room if it hasn't been paginated yet.
-                           if PREPAGINATE_VISIBLE_ROOMS && !room_info.has_been_paginated {
-                               room_info.has_been_paginated = true;
-                               submit_async_request(MatrixRequest::PaginateRoomTimeline {
-                                   room_id: room_info.room_id.clone(),
-                                   num_events: 50,
-                                   direction: PaginationDirection::Backwards,
-                               });
-                           }
-
-                           // Pass the room info down to the RoomPreview widget via Scope.
-                           scope = Scope::with_props(&*room_info);
-                           item
-                       } else {
-                           continue;
-                       }
-                    }
-                    // Draw the status label as the bottom entry.
-                    else if item_id == status_label_id {
-                        let item = list.item(cx, item_id, live_id!(status_label));
-                        item.as_view().apply_over(cx, live!{
-                            height: Fit,
-                            label = { text: (&self.status) }
-                        });
-                        item
-                    }
-                    // Draw a filler entry to take up space at the bottom of the portal list.
-                    else {
-                        list.item(cx, item_id, live_id!(bottom_filler))
-                    };
+                    item
+                }
+                // Draw the status label as the bottom entry.
+                else if item_id == status_label_id {
+                    let item = list.item(cx, item_id, live_id!(status_label));
+                    item.as_view().apply_over(cx, live!{
+                        height: Fit,
+                        label = { text: (&self.status) }
+                    });
+                    item
+                }
+                // Draw a filler entry to take up space at the bottom of the portal list.
+                else {
+                    list.item(cx, item_id, live_id!(bottom_filler))
+                };
 
                 item.draw_all(cx, &mut scope);
             }
         }
-
         DrawStep::done()
     }
 
