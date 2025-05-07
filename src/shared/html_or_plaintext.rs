@@ -94,11 +94,11 @@ live_design! {
         align: { y: 0.5 }
         font_size: (MESSAGE_FONT_SIZE),
         font_color: (MESSAGE_TEXT_COLOR),
-        draw_normal:      { color: (MESSAGE_TEXT_COLOR), } // text_style: { height_factor: (HTML_TEXT_HEIGHT_FACTOR), line_spacing: (HTML_LINE_SPACING) } }
-        draw_italic:      { color: (MESSAGE_TEXT_COLOR), } // text_style: { height_factor: (HTML_TEXT_HEIGHT_FACTOR), line_spacing: (HTML_LINE_SPACING) } }
-        draw_bold:        { color: (MESSAGE_TEXT_COLOR), } // text_style: { height_factor: (HTML_TEXT_HEIGHT_FACTOR), line_spacing: (HTML_LINE_SPACING) } }
-        draw_bold_italic: { color: (MESSAGE_TEXT_COLOR), } // text_style: { height_factor: (HTML_TEXT_HEIGHT_FACTOR), line_spacing: (HTML_LINE_SPACING) } }
-        draw_fixed:       { color: (MESSAGE_TEXT_COLOR), } // text_style: { height_factor: (HTML_TEXT_HEIGHT_FACTOR), line_spacing: (HTML_LINE_SPACING) } }
+        draw_normal:      { color: (MESSAGE_TEXT_COLOR), } // text_style: { line_spacing: (HTML_LINE_SPACING) } }
+        draw_italic:      { color: (MESSAGE_TEXT_COLOR), } // text_style: { line_spacing: (HTML_LINE_SPACING) } }
+        draw_bold:        { color: (MESSAGE_TEXT_COLOR), } // text_style: { line_spacing: (HTML_LINE_SPACING) } }
+        draw_bold_italic: { color: (MESSAGE_TEXT_COLOR), } // text_style: { line_spacing: (HTML_LINE_SPACING) } }
+        draw_fixed:       { color: (MESSAGE_TEXT_COLOR), } // text_style: { line_spacing: (HTML_LINE_SPACING) } }
         draw_block: {
             line_color: (MESSAGE_TEXT_COLOR)
             sep_color: (MESSAGE_TEXT_COLOR)

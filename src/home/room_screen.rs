@@ -5,7 +5,7 @@ use std::{borrow::Cow, collections::BTreeMap, ops::{DerefMut, Range}, sync::{Arc
 
 use bytesize::ByteSize;
 use imbl::Vector;
-use makepad_widgets::{image_cache::ImageBuffer, *};
+use makepad_widgets::{image_cache::ImageBuffer, text::selection::Cursor, *};
 use matrix_sdk::{room::RoomMember, ruma::{
     events::{receipt::Receipt, room::{
         message::{
@@ -960,7 +960,7 @@ impl Widget for RoomScreen {
             // Clear the replying-to preview pane if the "cancel reply" button was clicked
             // or if the `Escape` key was pressed within the message input box.
             if self.button(id!(cancel_reply_button)).clicked(actions)
-                || message_input.escape(actions)
+                || message_input.escaped(actions)
             {
                 self.clear_replying_to(cx);
                 self.redraw(cx);
@@ -2247,6 +2247,7 @@ impl RoomScreen {
     ///
     /// Note: after calling this function, the widget's `tl_state` will be `None`.
     fn save_state(&mut self) {
+        println!("Timeline::save_state()");
         let Some(mut tl) = self.tl_state.take() else {
             error!("Timeline::save_state(): skipping due to missing state, room {:?}", self.room_id);
             return;
@@ -2257,7 +2258,7 @@ impl RoomScreen {
         let editing_event = self.editing_pane(id!(editing_pane)).get_event_being_edited();
         let state = SavedState {
             first_index_and_scroll: Some((portal_list.first_id(), portal_list.scroll_position())),
-            message_input_state: message_input_box.save_state(),
+            message_input_state: TextInputState { text: message_input_box.text(), cursor: message_input_box.cursor() },
             replying_to: tl.replying_to.clone(),
             editing_event,
         };
@@ -2290,7 +2291,8 @@ impl RoomScreen {
         // 2. Restore the state of the message input box.
         let saved_message_input_state = std::mem::take(message_input_state);
         self.text_input(id!(message_input))
-            .restore_state(saved_message_input_state);
+            .set_cursor(cx, saved_message_input_state.cursor, true);
+        self.text_input(id!(message_input)).set_text(cx, &saved_message_input_state.text);
 
         // 3. Restore the state of the replying-to preview.
         if let Some(replying_to_event) = replying_to.take() {
@@ -2683,7 +2685,12 @@ struct SavedState {
     /// The event that the user is currently editing, if any.
     editing_event: Option<EventTimelineItem>,
 }
-
+#[derive(Clone, Debug, Default)]
+pub struct TextInputState {
+    pub text: String,
+    pub cursor: Cursor,
+    //history: History,
+}
 /// Returns info about the item in the list of `new_items` that matches the event ID
 /// of a visible item in the given `curr_items` list.
 ///

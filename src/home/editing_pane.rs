@@ -1,4 +1,4 @@
-use makepad_widgets::*;
+use makepad_widgets::{text::selection::Cursor, *};
 use matrix_sdk::{
     room::edit::EditedContent,
     ruma::{
@@ -110,7 +110,7 @@ live_design! {
             persistent = {
                 center = {
                     text_input = {
-                        empty_message: "Enter edited message..."
+                        empty_text: "Enter edited message..."
                     }
                 }
             }
@@ -166,7 +166,12 @@ struct EditingPaneInfo {
     event_tl_item: EventTimelineItem,
     room_id: OwnedRoomId,
 }
-
+#[derive(Clone, Debug, Default)]
+pub struct TextInputState {
+    pub text: String,
+    pub cursor: Cursor,
+    //history: History,
+}
 /// Actions specific to EditingPane for internal use
 #[derive(Clone, Debug, DefaultNone)]
 enum EditingPaneInternalAction {
@@ -227,6 +232,8 @@ pub struct EditingPane {
     is_animating_out: bool,
     #[rust]
     member_subscription: Option<RoomMemberSubscription>,
+    #[rust]
+    text_input_state: TextInputState,
 }
 
 impl Widget for EditingPane {
@@ -284,7 +291,7 @@ impl Widget for EditingPane {
             // Hide the editing pane if the cancel button was clicked
             // or if the `Escape` key was pressed within the edit text input.
             if self.button(id!(cancel_button)).clicked(actions)
-                || edit_text_input.escape(actions)
+                || edit_text_input.escaped(actions)
             {
                 self.animator_play(cx, id!(panel.hide));
                 self.redraw(cx);
@@ -517,7 +524,8 @@ impl EditingPane {
 
         // Set the text input's cursor to the end and give it key focus.
         let text_len = edit_text_input.text().len();
-        edit_text_input.text_input(id!(text_input)).set_cursor(text_len, text_len);
+        self.text_input_state.cursor.index = text_len;
+        edit_text_input.text_input(id!(text_input)).set_cursor(cx, self.text_input_state.cursor, false);
         edit_text_input.text_input(id!(text_input)).set_key_focus(cx);
 
         self.animator_play(cx, id!(panel.show));

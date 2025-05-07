@@ -50,7 +50,7 @@ live_design! {
             width: Fill,
             height: Fit,
 
-            empty_message: "Filter rooms..."
+            empty_text: "Filter rooms..."
 
             draw_text: {
                 text_style: { font_size: 10 },

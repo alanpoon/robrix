@@ -48,7 +48,7 @@ live_design! {
             persistent = {
                 center = {
                     text_input = {
-                        empty_message: "Write a message (in Markdown) ..."
+                        empty_text: "Write a message (in Markdown) ..."
                     }
                 }
             }
