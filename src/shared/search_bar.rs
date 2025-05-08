@@ -1,5 +1,4 @@
 use makepad_widgets::*;
-
 live_design! {
     use link::theme::*;
     use link::shaders::*;
@@ -76,6 +75,10 @@ pub enum SearchBarAction {
     Search(String),
     /// The user has cleared the search query.
     ResetSearch,
+    /// The user has clicked the search bar.
+    ClickSearch,
+    /// The user has clear the text in the search bar.
+    Clear,
     None
 }
 
@@ -83,6 +86,15 @@ impl Widget for SearchBar {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         self.view.handle_event(cx, event, scope);
         self.widget_match_event(cx, event, scope);
+        let area = self.text_input(id!(input)).area();
+        if let Hit::FingerDown(..) = event.hits(cx, area) {
+                let widget_uid = self.widget_uid(); 
+                cx.widget_action(
+                    widget_uid,
+                    &scope.path,
+                    SearchBarAction::ClickSearch
+                );
+            }
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
@@ -94,7 +106,6 @@ impl WidgetMatchEvent for SearchBar {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, scope: &mut Scope) {
         let input = self.text_input(id!(input));
         let clear_button = self.button(id!(clear_button));
-
         // Handle user changing the input text
         if let Some(keywords) = input.changed(actions) {
             clear_button.set_visible(cx, !keywords.is_empty());
@@ -125,6 +136,12 @@ impl WidgetMatchEvent for SearchBar {
                 &scope.path,
                 SearchBarAction::ResetSearch,
             );
+        }
+        for action in actions {
+            if let SearchBarAction::Clear = action.as_widget_action().widget_uid_eq(self.widget_uid()).cast() {
+                println!("clear search bar");
+                self.text_input(id!(input)).set_text(cx, "");
+            }
         }
     }
 }

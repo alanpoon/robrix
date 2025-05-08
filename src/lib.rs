@@ -20,7 +20,6 @@ pub mod shared;
 mod event_preview;
 mod room;
 
-
 // Matrix stuff
 pub mod sliding_sync;
 pub mod avatar_cache;
