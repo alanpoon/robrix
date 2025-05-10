@@ -4,8 +4,7 @@ use std::collections::HashMap;
 
 use crate::{app::{AppState, AppStateAction, SelectedRoom}, utils::room_name_or_id};
 use super::{invite_screen::InviteScreenWidgetRefExt, room_screen::RoomScreenWidgetRefExt, rooms_list::RoomsListAction};
-
-use super::{room_screen::RoomScreenWidgetRefExt, room_search_result::SearchResultAction};
+use super::room_search_result::SearchResultAction;
 live_design! {
     use link::theme::*;
     use link::shaders::*;

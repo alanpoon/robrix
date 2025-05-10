@@ -22,26 +22,24 @@ use robius_location::Coordinates;
 use ruma::{api::client::search::search_events::v3::ResultCategories, events::{AnySyncTimelineEvent, AnyTimelineEvent}, serde::Raw, OwnedUserId, UserId};
 
 use crate::{
-    avatar_cache, event_preview::{body_of_timeline_item, text_preview_of_member_profile_change, text_preview_of_other_state, text_preview_of_redacted_message, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, location::init_location_subscriber, media_cache::{MediaCache, MediaCacheEntry}, profile::{
+    app::AppState, avatar_cache, event_preview::{body_of_timeline_item, text_preview_of_member_profile_change, text_preview_of_other_state, text_preview_of_redacted_message, text_preview_of_room_membership_change, text_preview_of_timeline_item}, home::loading_pane::{LoadingPaneState, LoadingPaneWidgetExt}, location::init_location_subscriber, media_cache::{MediaCache, MediaCacheEntry}, profile::{
         user_profile::{AvatarState, ShowUserProfileAction, UserProfile, UserProfileAndRoomId, UserProfilePaneInfo, UserProfileSlidingPaneRef, UserProfileSlidingPaneWidgetExt},
         user_profile_cache,
     }, shared::{
-        avatar::AvatarWidgetRefExt, callout_tooltip::TooltipAction, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::enqueue_popup_notification, styles::COLOR_DANGER_RED, text_or_image::{TextOrImageRef, TextOrImageWidgetRefExt}, typing_animation::TypingAnimationWidgetExt
+        avatar::AvatarWidgetRefExt, callout_tooltip::TooltipAction, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::enqueue_popup_notification, room_filter_input_bar::RoomFilterAction, styles::COLOR_DANGER_RED, text_or_image::{TextOrImageRef, TextOrImageWidgetRefExt}, typing_animation::TypingAnimationWidgetExt
     }, sliding_sync::{get_client, submit_async_request, take_timeline_endpoints, BackwardsPaginateUntilEventRequest, MatrixRequest, PaginationDirection, TimelineRequestSender, UserPowerLevels}, utils::{self, room_name_or_id, unix_time_millis_to_datetime, ImageFormat, MEDIA_THUMBNAIL_FORMAT}
 };
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
 use crate::home::room_read_receipt::AvatarRowWidgetRefExt;
 use crate::room::room_input_bar::RoomInputBarWidgetExt;
 use crate::shared::mentionable_text_input::MentionableTextInputWidgetRefExt;
-
 use rangemap::RangeSet;
 
-use super::{editing_pane::{EditingPaneAction, EditingPaneWidgetExt}, event_reaction_list::ReactionData, loading_pane::LoadingPaneRef, location_preview::LocationPreviewWidgetExt, new_message_context_menu::{MessageAbilities, MessageDetails}, room_read_receipt::{self, populate_read_receipts, MAX_VISIBLE_AVATARS_IN_READ_RECEIPT}};
+use super::{editing_pane::{EditingPaneAction, EditingPaneWidgetExt}, event_reaction_list::ReactionData, loading_pane::LoadingPaneRef, location_preview::LocationPreviewWidgetExt, new_message_context_menu::{MessageAbilities, MessageDetails}, room_read_receipt::{self, populate_read_receipts, MAX_VISIBLE_AVATARS_IN_READ_RECEIPT}, room_search_result::{self, SearchResultAction, SearchResultWidgetExt, SearchTimelineItem}, rooms_list::RoomsListWidgetExt};
 
 const GEO_URI_SCHEME: &str = "geo:";
 
 const MESSAGE_NOTICE_TEXT_COLOR: Vec3 = Vec3 { x: 0.5, y: 0.5, z: 0.5 };
-const COLOR_DANGER_RED: Vec3 = Vec3 { x: 0.862, y: 0.0, z: 0.02 };
 //LightGreen
 const SEARCH_HIGHLIGHT: Vec3 = Vec3 { x: 0.89, y: 0.967, z: 0.929 };
 
@@ -641,92 +639,6 @@ live_design! {
         jump_to_bottom = <JumpToBottomButton> { }
     }
 
-    LocationPreview = {{LocationPreview}} {
-        visible: false
-        width: Fill
-        height: Fit
-        flow: Down
-        padding: {left: 12.0, top: 12.0, bottom: 12.0, right: 10.0}
-        spacing: 15
-
-        show_bg: true,
-        draw_bg: {
-            color: #xF0F5FF,
-        }
-
-        <Label> {
-            width: Fill,
-            height: Fit,
-            draw_text: {
-                wrap: Word,
-                color: (MESSAGE_TEXT_COLOR),
-                text_style: <MESSAGE_TEXT_STYLE>{ font_size: 10.0 },
-            }
-            text: "Send your location to this room?"
-        }
-
-        location_label = <Label> {
-            width: Fill,
-            height: Fit,
-            align: {x: 0.0, y: 0.5},
-            padding: {left: 5.0}
-            draw_text: {
-                wrap: Word,
-                color: (MESSAGE_TEXT_COLOR),
-                text_style: <MESSAGE_TEXT_STYLE>{},
-            }
-            text: "Fetching current location..."
-        }
-
-        <View> {
-            width: Fill, height: Fit
-            flow: Right,
-            align: {x: 0.0, y: 0.5}
-            spacing: 15
-
-            cancel_location_button = <RobrixIconButton> {
-                align: {x: 0.5, y: 0.5}
-                padding: {left: 15, right: 15}
-                draw_icon: {
-                    svg_file: (ICON_BLOCK_USER)
-                    color: (COLOR_DANGER_RED),
-                }
-                icon_walk: {width: 16, height: 16, margin: {left: -2, right: -1, top: -1} }
-
-                draw_bg: {
-                    border_color: (COLOR_DANGER_RED),
-                    color: #fff0f0 // light red
-                }
-                text: "Cancel"
-                draw_text:{
-                    color: (COLOR_DANGER_RED),
-                }
-            }
-
-            send_location_button = <RobrixIconButton> {
-                // disabled by default; will be enabled upon receiving valid location update.
-                enabled: false,
-                align: {x: 0.5, y: 0.5}
-                padding: {left: 15, right: 15}
-                draw_icon: {
-                    svg_file: (ICON_SEND)
-                    color: (COLOR_ACCEPT_GREEN),
-                }
-                icon_walk: {width: 16, height: 16, margin: {left: -2, right: -1} }
-
-                draw_bg: {
-                    border_color: (COLOR_ACCEPT_GREEN),
-                    color: #f0fff0 // light green
-                }
-                text: "Yes"
-                draw_text:{
-                    color: (COLOR_ACCEPT_GREEN),
-                }
-            }
-        }
-    }
-
-
     pub RoomScreen = {{RoomScreen}} {
         width: Fill, height: Fill,
         cursor: Default,
@@ -749,6 +661,10 @@ live_design! {
                 width:0, height:0,
                 rooms_list = <RoomsList> {}
             }
+            <CachedWidget> {
+                width:0, height:0,
+                room_filer_input_bar = <RoomFilterInputBar> { }
+            }
             keyboard_view = <KeyboardView> {
                 width: Fill, height: Fill,
                 flow: Down,
@@ -756,6 +672,9 @@ live_design! {
                 // First, display the timeline of all messages/events.
                 timeline = <Timeline> {}
 
+                search_timeline = <Timeline> {
+                    visible: false
+                }
                 // Below that, display a typing notice when other users in the room are typing.
                 typing_notice = <View> {
                     visible: false
@@ -895,10 +814,8 @@ live_design! {
             // to finish loading, e.g., when loading an older replied-to message.
             loading_pane = <LoadingPane> { }
 
-            search_result_overlay = <View> {
-                visible: false,
-                search_result_inner = <SearchResult> { 
-                } 
+            search_result_plane = <SearchResult> {
+                visible: false
             }
             /*
              * TODO: add the action bar back in as a series of floating buttons.
@@ -967,7 +884,9 @@ pub struct RoomScreen {
     /// The search query to be sent adter the search delay timer ends.
     /// This field is reset when the user continues typing before the search delay timer ends.
     #[rust] search_query: String,
-    #[live] pub no_more_template: Option<LivePtr>
+    #[rust] search_include_all_rooms: bool,
+    #[live] pub no_more_template: Option<LivePtr>,
+    #[rust] pub search_bar_widget_uid: Option<WidgetUid>
 }
 impl Drop for RoomScreen {
 
@@ -986,6 +905,7 @@ impl Widget for RoomScreen {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         let room_screen_widget_uid = self.widget_uid();
         let portal_list = self.portal_list(id!(timeline.list));
+        let search_portal_list = self.portal_list(id!(search_timeline.list));
         let user_profile_sliding_pane = self.user_profile_sliding_pane(id!(user_profile_sliding_pane));
         let loading_pane = self.loading_pane(id!(loading_pane));
 
@@ -1005,12 +925,13 @@ impl Widget for RoomScreen {
             if self.search_delay_timer.is_timer(te).is_some() {
                 if let Some(room_id) = &self.room_id {
                     if self.search_query.is_empty() {
-                        self.other_display = RoomScreenOtherDisplay::None;
+                        self.view(id!(search_timeline)).set_visible(cx, false);
                         return; 
                     }
+                    let Some(tl_state) = &self.tl_state else { return };
                     submit_async_request(MatrixRequest::SearchMessages { 
                         room_id: room_id.clone(), 
-                        include_all_rooms: false,
+                        include_all_rooms: tl_state.searched_include_all_rooms,
                         search_term: self.search_query.clone(),
                         next_batch: None,
                         abort_previous_search: true
@@ -1221,8 +1142,10 @@ impl Widget for RoomScreen {
             }
             if self.view.button(id!(search_all_rooms_button)).clicked(actions) {
                 if let Some(room_id) = self.room_id.clone() {
-                    self.view(id!(search_result_overlay)).set_visible(cx, true);
-                    self.search_result(id!(search_result_inner)).reset_summary(cx);
+                    self.search_result(id!(search_result_plane)).reset(cx);
+                    let Some(tl) = self.tl_state.as_mut() else { return };
+                    tl.searched_results.clear();
+                    tl.searched_include_all_rooms = true;
                     submit_async_request(MatrixRequest::SearchMessages { room_id, include_all_rooms: true, search_term: self.search_query.clone(), next_batch: None, abort_previous_search: true });
                 }
             }
@@ -1773,7 +1696,6 @@ impl RoomScreen {
                     tl.fully_paginated = false;
                     // Set the portal list to the very bottom of the timeline.
                     let mut last_room_id = None;
-                    let rooms_names = self.view.rooms_list(id!(rooms_list)).get_all_rooms_names();
                     
                     // tl.searched_results.push_back(SearchTimelineItem::with_no_more_messages());
                     // for item in result.room_events.results.iter().rev() {
@@ -1850,13 +1772,13 @@ impl RoomScreen {
                         if let Some(ref mut last_room_id) = last_room_id {
                             if last_room_id != &room_id {
                                 *last_room_id = room_id;
-                                if let Some(room_name) = rooms_names.get(last_room_id).and_then(|f|f.clone()) {
+                                if let Some(room_name) = self.view.rooms_list(id!(rooms_list)).get_room_name(last_room_id) {
                                     tl.searched_results.push_front(SearchTimelineItem::with_room_header(room_name));
                                 }
                             }
                         } else {
                             last_room_id = Some(room_id.clone());
-                            if let Some(room_name) = rooms_names.get(&room_id).and_then(|f|f.clone()) {
+                            if let Some(room_name) = self.view.rooms_list(id!(rooms_list)).get_room_name(&room_id) {
                                 tl.searched_results.push_front(SearchTimelineItem::with_room_header(room_name));
                             }
                         }
@@ -2468,7 +2390,8 @@ impl RoomScreen {
                 scrolled_past_read_marker: false,
                 latest_own_user_receipt: None,
                 searched_results: Vector::new(),
-                searched_results_highlighted_strings: Vec::new()
+                searched_results_highlighted_strings: Vec::new(),
+                searched_include_all_rooms: false,
             };
             (new_tl_state, true)
         };
@@ -2739,50 +2662,71 @@ impl RoomScreen {
         action: &Action,
         scope: &mut Scope,
     ) {
-        if let Some(SearchResultAction::Close) = action.downcast_ref() {
-            self.search_result(id!(search_result_inner)).reset_summary(cx);
-            self.view(id!(search_result_overlay)).set_visible(cx, false);
-            self.other_display = RoomScreenOtherDisplay::None;
-            if let Some(ref mut tl_state) = self.tl_state {
-                tl_state.searched_results = Vector::new();
-                tl_state.searched_results_highlighted_strings = vec![];
-            }
-        }
         let widget_action = action.as_widget_action();
+        // for action in actions {
+        //     if let RoomFilterAction::Changed(keywords) = action.as_widget_action().cast() {
+        //         self.update_displayed_rooms(cx, &keywords);
+        //     }
+        // }
         match widget_action.cast() {
-            SearchBarAction::Search(keywords) => {
-                if let (Some(selected_room), Some(search_widget_id)) = {
+            RoomFilterAction::Changed(search_term)=> {
+                if let Some(selected_room) = {
                     let app_state = scope.data.get::<AppState>().unwrap();
-                    (app_state.rooms_panel.selected_room.clone(), app_state.search_widget)
+                    app_state.selected_room.clone()
                 } {
-                    if let Some(widget_action) = widget_action {
-                        if widget_action.widget_uid == search_widget_id && Some(selected_room.room_id) == self.room_id {
-                            self.search_delay_timer = cx.start_timeout(1.0);
-                            self.search_query = keywords.clone();
-                            self.other_display = RoomScreenOtherDisplay::SearchResult;
-                            self.view(id!(search_result_overlay)).set_visible(cx, true);
+                    if  Some(selected_room.room_id()) == self.room_id.as_ref() {
+                        self.search_delay_timer = cx.start_timeout(1.0);
+                        if let Some(ref mut tl_state) = self.tl_state {
+                            tl_state.searched_results.clear();
+                            tl_state.searched_results_highlighted_strings.clear();
+                            tl_state.searched_include_all_rooms = false;
                         }
+                        self.search_result(id!(search_result_plane)).set_search_criteria(cx, search_term.clone());
+                        self.view(id!(timeline)).set_visible(cx, false);
                     }
                 }
             }
-            SearchBarAction::ResetSearch => {
-                if let (Some(selected_room), Some(search_widget_id)) = {
-                    let app_state = scope.data.get::<AppState>().unwrap();
-                    (app_state.rooms_panel.selected_room.clone(), app_state.search_widget)
-                } {
-                    if let Some(widget_action) = widget_action {
-                        if widget_action.widget_uid == search_widget_id && Some(selected_room.room_id) == self.room_id {
-                            cx.stop_timer(self.search_delay_timer);
-                            self.search_query = String::new();
-                            self.other_display = RoomScreenOtherDisplay::None;
-                            self.view(id!(search_result_overlay)).set_visible(cx, false);
-                        }
-                    }
-                }
-            }
+            // SearchBarAction::ResetSearch => {
+            //     if let (Some(selected_room), Some(search_widget_id)) = {
+            //         let app_state = scope.data.get::<AppState>().unwrap();
+            //         (app_state.selected_room.clone(), app_state.search_widget)
+            //     } {
+            //         if let Some(widget_action) = widget_action {
+            //             if widget_action.widget_uid == search_widget_id && Some(selected_room.room_id()) == self.room_id.as_ref() {
+            //                 cx.stop_timer(self.search_delay_timer);
+            //                 let Some(tl_state) = self.tl_state.as_mut() else { return };
+            //                 tl_state.searched_results.clear();
+            //                 tl_state.searched_results_highlighted_strings.clear();
+            //                 tl_state.searched_include_all_rooms = false;
+            //                 self.view(id!(search_timeline)).set_visible(cx, false);
+            //                 self.view(id!(search_result_overlay)).set_visible(cx, false);
+            //             }
+            //         }
+            //     }
+            // }
+            // SearchBarAction::ClickSearch => {
+            //     if let (Some(selected_room), Some(search_widget_id)) = {
+            //         let app_state = scope.data.get::<AppState>().unwrap();
+            //         (app_state.selected_room.clone(), app_state.search_widget)
+            //     } {
+            //         if let Some(widget_action) = widget_action {
+            //             if widget_action.widget_uid == search_widget_id && Some(selected_room.room_id()) == self.room_id.as_ref() {
+            //                 let search_term = if let Some(ref mut tl_state) = self.tl_state { tl_state.search_result_state.search_term.clone() } else { return };
+            //                 self.search_result(id!(search_result_plane)).set_search_criteria(cx, search_term);
+            //                 self.view(id!(timeline)).set_visible(cx, false);
+            //             }
+            //         }
+            //     }
+            // }
             _ => {
 
             }
+        }
+        match widget_action.cast() {
+            SearchResultAction::Close => {
+                self.room_input_bar(id!(room_filer_input_bar)).set_visible(cx, true);
+            }
+            _ => {}
         }
         
     }
@@ -2954,6 +2898,7 @@ pub struct TimelineUiState {
     pub searched_results: Vector<SearchTimelineItem>,
     /// The list of strings that should be highlighted in the search results
     pub searched_results_highlighted_strings: Vec<String>,
+    pub searched_include_all_rooms: bool,
     /// The range of items (indices in the above `items` list) whose event **contents** have been drawn
     /// since the last update and thus do not need to be re-populated on future draw events.
     ///

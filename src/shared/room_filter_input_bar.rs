@@ -82,12 +82,23 @@ pub struct RoomFilterInputBar {
 pub enum RoomFilterAction {
     /// The user has changed the text entered into the filter bar.
     Changed(String),
+    /// The user has clicked the input bar.
+    Click,
     None,
 }
 
 impl Widget for RoomFilterInputBar {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         self.view.handle_event(cx, event, scope);
+        let area = self.text_input(id!(input)).area();
+        if let Hit::FingerDown(..) = event.hits(cx, area) {
+            let widget_uid = self.widget_uid(); 
+            cx.widget_action(
+                widget_uid,
+                &scope.path,
+                RoomFilterAction::Click
+            );
+        }
         self.widget_match_event(cx, event, scope);
     }
 

@@ -1117,7 +1117,7 @@ async fn async_worker(
                     abort_core_task(CoreTask::Search).await;
                 }                
                 let client = CLIENT.get().unwrap();
-                let mut all_room_info = ALL_ROOM_INFO.lock().unwrap();
+                let mut all_room_info = ALL_JOINED_ROOMS.lock().unwrap();
                 let Some(room_info) = all_room_info.get_mut(&room_id) else {
                     log!("Skipping search message request for not-yet-known room {room_id}");
                     continue;

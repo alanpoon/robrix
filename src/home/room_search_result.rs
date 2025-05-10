@@ -125,17 +125,24 @@ live_design! {
 #[derive(Live, LiveHook, Widget)]
 pub struct SearchResult {
     #[deref] pub view: View,
-    /// The room ID of the currently-shown room.
-    #[rust] pub room_id: Option<OwnedRoomId>,
+    #[rust] pub search_criteria: String,
+    #[rust] pub result_count: u32,
+    #[live(true)] visible: bool,
 }
 
 impl Widget for SearchResult {
     // Handle events and actions for the SearchResult widget and its inner Timeline view.
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        if !self.visible {
+            return;
+        }
         self.match_event(cx, event);
         self.view.handle_event(cx, event, scope);
     }
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        if !self.visible {
+            return DrawStep::done();
+        }
         self.view.draw_walk(cx, scope, walk)
     }
 }
@@ -143,54 +150,89 @@ impl MatchEvent for SearchResult {
     fn handle_actions(&mut self, cx: &mut Cx, actions:&Actions) {
         let cancel_button_clicked = self.view.button(id!(cancel_button)).clicked(actions);
         if cancel_button_clicked {
-            cx.action(SearchResultAction::Close);
-        }
-        for action in actions {
-            match action.downcast_ref() {
-                Some(SearchResultAction::Success(result_length, search_criteria)) => {
-                    self.set_summary(cx, *result_length, search_criteria.clone());
-                }
-                Some(SearchResultAction::Pending) => {
-                    self.view.search_result(id!(search_result_overlay)).set_visible(cx, true);
-                }
-                _ => {}
-            }
+            cx.widget_action(self.widget_uid(), &Scope::empty().path, SearchBarAction::ResetSearch);
         }
     }
 }
 impl SearchResult {
-    /// Sets the `search_result_count` and `search_criteria` fields of this `SearchResult`.
+    /// Display search summary.
     ///
     /// This is used to display the number of search results and the search criteria
     /// in the top-right of the room screen.
-    fn set_summary(&mut self, cx: &mut Cx, search_result_count: usize, search_criteria: String) {
-        self.view.html(id!(summary_label)).set_text(cx, &format!("{} results for <b>'{}'</b>", search_result_count, search_criteria));
+    fn set_result_count(&mut self, cx: &mut Cx, search_result_count: u32) {
+        self.result_count = search_result_count;
+        self.view.html(id!(summary_label)).set_text(cx, &format!("{} results for <b>'{}'</b>", self.result_count, self.search_criteria));
         self.view.view(id!(loading_view)).set_visible(cx, false);
     }
-
-    /// Resets the search result summary and displays the loading view.
+    fn set_search_criteria(&mut self, cx: &mut Cx, search_criteria: String) {
+        self.view.html(id!(summary_label)).set_text(cx, &format!("Searching for <b>'{}'</b>", search_criteria));
+        self.search_criteria = search_criteria;
+        self.visible = true;
+    }
+    /// Resets the search result summary and set the loading view back to visible.
     ///
     /// This function clears the summary text and makes the loading indicator visible.
     /// It is typically used when a new search is initiated or search results are being cleared.
-    fn reset_summary(&mut self, cx: &mut Cx) {
+    fn reset(&mut self, cx: &mut Cx) {
         self.view.html(id!(summary_label)).set_text(cx, "");
         self.view.view(id!(loading_view)).set_visible(cx, true);
+        self.search_criteria = String::from("");
+        self.visible = false;
+        self.result_count = 0;
+    }
+    /// Displays the loading view for backwards pagination for search result.
+    fn display_top_space(&mut self, cx: &mut Cx) {
+        self.view.view(id!(top_space)).set_visible(cx, true);
+    }
+    /// Hides the loading view for backwards pagination for search result.
+    fn hide_top_space(&mut self, cx: &mut Cx) {
+    self.view.view(id!(top_space)).set_visible(cx, false);
     }
 }
 impl SearchResultRef {
-    /// See [`SearchResult::set_summary()`].
-    pub fn set_summary(&self, cx: &mut Cx, search_result_count: usize, search_criteria: String) {
-        let Some(mut inner) = self.borrow_mut() else { return };
-        inner.set_summary(cx, search_result_count, search_criteria);
+    /// See [`SearchResult::set_visible()`].
+    pub fn set_visible(&self, cx: &mut Cx, visible: bool) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.visible = visible;
+            inner.redraw(cx);
+        }
     }
-
-    /// See [`SearchResult::reset_summary()`].
-    pub fn reset_summary(&self, cx: &mut Cx) {
+    /// See [`SearchResult::set_result_count()`].
+    pub fn set_result_count(&mut self, cx: &mut Cx, search_result_count: u32) {
         let Some(mut inner) = self.borrow_mut() else { return };
-        inner.reset_summary(cx);
+        inner.set_result_count(cx, search_result_count);
+    }
+    /// See [`SearchResult::set_search_criteria()`].
+    pub fn set_search_criteria(&self, cx: &mut Cx, search_criteria: String) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_search_criteria(cx, search_criteria);
+    }
+    /// See [`SearchResult::reset()`].
+    pub fn reset(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.reset(cx);
+    }
+    /// See [`SearchResult::display_top_space()`].
+    pub fn display_top_space(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.display_top_space(cx);
+    }
+    /// See [`SearchResult::hide_top_space()`].
+    pub fn hide_top_space(&self, cx: &mut Cx) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.hide_top_space(cx);
     }
 }
-
+#[derive(Clone, Debug)]
+pub enum SearchBarAction {
+//    /// The user has entered a search query.
+//    Search(String),
+   /// The user has cleared the search query.
+   ResetSearch,
+   /// The user has clear the text in the search bar.
+   Clear,
+   None
+}
 pub fn search_result_draw_walk(room_screen: &mut RoomScreen, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
     let room_screen_widget_uid = room_screen.widget_uid();
     let search_timeline_widget = room_screen.view(id!(search_timeline));
