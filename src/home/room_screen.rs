@@ -32,7 +32,7 @@ use crate::{
     },
     room::{room_input_bar::RoomInputBarState, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        avatar::AvatarWidgetRefExt, callout_tooltip::TooltipAction, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{enqueue_popup_notification, PopupItem, PopupKind}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        avatar::AvatarWidgetRefExt, callout_tooltip::TooltipAction, collapsible_header::HeaderCategory, collapsible_header_small_state::{CollapsibleHeaderSmallStateAction, CollapsibleHeaderSmallStateWidgetRefExt}, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{enqueue_popup_notification, PopupItem, PopupKind}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
     },
     sliding_sync::{get_client, submit_async_request, take_timeline_endpoints, BackwardsPaginateUntilEventRequest, MatrixRequest, PaginationDirection, TimelineEndpoints, TimelineRequestSender, UserPowerLevels}, utils::{self, room_name_or_id, unix_time_millis_to_datetime, ImageFormat, MEDIA_THUMBNAIL_FORMAT}
 };
@@ -69,6 +69,7 @@ live_design! {
     use crate::shared::html_or_plaintext::*;
     use crate::shared::icon_button::*;
     use crate::shared::jump_to_bottom_button::*;
+    use crate::shared::collapsible_header_small_state::*;
     use crate::profile::user_profile::UserProfileSlidingPane;
     use crate::home::edited_indicator::*;
     use crate::home::event_reaction_list::*;
@@ -467,6 +468,7 @@ live_design! {
             ImageMessage = <ImageMessage> {}
             CondensedImageMessage = <CondensedImageMessage> {}
             SmallStateEvent = <SmallStateEvent> {}
+            CollapsibleHeaderSmallState = <CollapsibleHeaderSmallState> {}
             Empty = <Empty> {}
             DateDivider = <DateDivider> {}
             ReadMarker = <ReadMarker> {}
@@ -566,6 +568,8 @@ pub struct RoomScreen {
     #[rust] is_loaded: bool,
     /// Whether or not all rooms have been loaded (received from the homeserver).
     #[rust] all_rooms_loaded: bool,
+    /// Whether small state event groups are expanded.
+    #[rust] is_small_state_group_expanded: bool,
 }
 impl Drop for RoomScreen {
     fn drop(&mut self) {
@@ -703,6 +707,14 @@ impl Widget for RoomScreen {
                                 room_member: None,
                             },
                         );
+                    }
+                }
+                
+                // Handle collapsible header toggle actions for small state events
+                if let CollapsibleHeaderSmallStateAction::Toggled { category } = action.as_widget_action().cast() {
+                    if category == HeaderCategory::SmallStateEvents {
+                        self.is_small_state_group_expanded = !self.is_small_state_group_expanded;
+                        self.redraw(cx);
                     }
                 }
             }
@@ -943,14 +955,31 @@ impl Widget for RoomScreen {
                         continue;
                     };
 
-                    // Determine whether this item's content and profile have been drawn since the last update.
-                    // Pass this state to each of the `populate_*` functions so they can attempt to re-use
-                    // an item in the timeline's portallist that was previously populated, if one exists.
-                    let item_drawn_status = ItemDrawnStatus {
-                        content_drawn: tl_state.content_drawn_since_last_update.contains(&tl_idx),
-                        profile_drawn: tl_state.profile_drawn_since_last_update.contains(&tl_idx),
-                    };
-                    let (item, item_new_draw_status) = match timeline_item.kind() {
+                    // Check if we should insert a collapsible header for small state events
+                    let prev_item = if tl_idx > 0 { tl_items.get(tl_idx - 1) } else { None };
+                    if should_insert_small_state_header(timeline_item, prev_item.map(|i| i.as_ref())) {
+                        // Draw a collapsible header for small state events
+                        let header_item = list.item(cx, item_id, id!(CollapsibleHeaderSmallState));
+                        header_item.as_collapsible_header_small_state().set_details(
+                            cx,
+                            self.is_small_state_group_expanded,
+                            HeaderCategory::SmallStateEvents,
+                            0, // No unread badge for now
+                        );
+                        header_item
+                    } else if is_small_state_event(timeline_item) && !self.is_small_state_group_expanded {
+                        // If this is a small state event and the group is collapsed, render as empty
+                        list.item(cx, item_id, id!(Empty))
+                    } else {
+                        // Normal timeline item rendering
+                        // Determine whether this item's content and profile have been drawn since the last update.
+                        // Pass this state to each of the `populate_*` functions so they can attempt to re-use
+                        // an item in the timeline's portallist that was previously populated, if one exists.
+                        let item_drawn_status = ItemDrawnStatus {
+                            content_drawn: tl_state.content_drawn_since_last_update.contains(&tl_idx),
+                            profile_drawn: tl_state.profile_drawn_since_last_update.contains(&tl_idx),
+                        };
+                        let (item, item_new_draw_status) = match timeline_item.kind() {
                         TimelineItemKind::Event(event_tl_item) => match event_tl_item.content() {
                             TimelineItemContent::MsgLike(msg_like_content) => match &msg_like_content.kind {
                                 MsgLikeKind::Message(_) | MsgLikeKind::Sticker(_) => {
@@ -1059,16 +1088,17 @@ impl Widget for RoomScreen {
                             let item = list.item(cx, item_id, id!(Empty));
                             (item, ItemDrawnStatus::both_drawn())
                         }
-                    };
+                        };
 
-                    // Now that we've drawn the item, add its index to the set of drawn items.
-                    if item_new_draw_status.content_drawn {
-                        tl_state.content_drawn_since_last_update.insert(tl_idx .. tl_idx + 1);
+                        // Now that we've drawn the item, add its index to the set of drawn items.
+                        if item_new_draw_status.content_drawn {
+                            tl_state.content_drawn_since_last_update.insert(tl_idx .. tl_idx + 1);
+                        }
+                        if item_new_draw_status.profile_drawn {
+                            tl_state.profile_drawn_since_last_update.insert(tl_idx .. tl_idx + 1);
+                        }
+                        item
                     }
-                    if item_new_draw_status.profile_drawn {
-                        tl_state.profile_drawn_since_last_update.insert(tl_idx .. tl_idx + 1);
-                    }
-                    item
                 };
                 item.draw_all(cx, scope);
             }
@@ -4161,6 +4191,39 @@ impl MessageRef {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.set_data(details);
     }
+}
+
+/// Returns true if the timeline item is a small state event that should be grouped.
+fn is_small_state_event(timeline_item: &TimelineItem) -> bool {
+    match timeline_item.kind() {
+        TimelineItemKind::Event(event_tl_item) => match event_tl_item.content() {
+            TimelineItemContent::MsgLike(msg_like_content) => matches!(
+                msg_like_content.kind,
+                MsgLikeKind::Poll(_) | MsgLikeKind::Redacted | MsgLikeKind::UnableToDecrypt(_) | MsgLikeKind::Other(_)
+            ),
+            TimelineItemContent::MembershipChange(_) |
+            TimelineItemContent::ProfileChange(_) |
+            TimelineItemContent::OtherState(_) => true,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Returns true if we should insert a collapsible header before this item.
+/// This happens when:
+/// 1. The current item is a small state event
+/// 2. The previous item was not a small state event (or doesn't exist)
+fn should_insert_small_state_header(
+    current_item: &TimelineItem,
+    prev_item: Option<&TimelineItem>,
+) -> bool {
+    if !is_small_state_event(current_item) {
+        return false;
+    }
+    
+    // Insert header if this is the first item or previous item wasn't a small state event
+    prev_item.map_or(true, |prev| !is_small_state_event(prev))
 }
 
 /// Clears all UI-related timeline states for all known rooms.

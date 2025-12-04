@@ -1,17 +1,11 @@
-//! This module defines a collapsible header wrapper with a triangle icon
-//! that indicates whether the header is expanded or collapsed.
+//! This module defines a generic collapsible header widget for small state events
+//! that can be used in any context without requiring specific scope props.
 //!
-//! This widget can be clicked to toggle between expanded and collapsed.
-//!
-//! The collapsible header is *just* the header, it doesn't actually contain any content.
-//! This design is necessary because the header is drawn within a PortalList,
-//! and its content is also drawn within that PortalList separately from its content.
+//! This widget can be clicked to toggle between expanded and collapsed states.
 
 use makepad_widgets::*;
-
-use crate::home::rooms_list::RoomsListScopeProps;
-
 use super::unread_badge::UnreadBadgeWidgetExt;
+use super::collapsible_header::HeaderCategory;
 
 live_design! {
     use link::theme::*;
@@ -26,8 +20,7 @@ live_design! {
     COLOR_HEADER_FG = #F;
     COLOR_HEADER_BG = (COLOR_ROBRIX_PURPLE); // the purple color from the Robrix logo
 
-
-    pub CollapsibleHeader = {{CollapsibleHeader}}<RoundedView> {
+    pub CollapsibleHeaderSmallState = {{CollapsibleHeaderSmallState}}<RoundedView> {
         width: Fill,
         height: 35,
         align: { x: 0.0, y: 0.5 },
@@ -66,42 +59,8 @@ live_design! {
     }
 }
 
-/// The categories of collapsible headers in the rooms list.
-#[derive(Copy, Clone, Debug, DefaultNone, PartialEq)]
-pub enum HeaderCategory {
-    /// Rooms the user has been invited to but has not yet joined.
-    Invites,
-    /// Joined rooms that the user has marked as favorites.
-    Favorites,
-    /// Joined rooms that are direct messages with other users.
-    DirectRooms,
-    /// Joined rooms that are not direct messages or favorites.
-    RegularRooms,
-    /// Joined rooms that the user has marked as low priority.
-    LowPriority,
-    /// Rooms that the user has left.
-    LeftRooms,
-    /// Small state events that can be collapsed together.
-    SmallStateEvents,
-    None,
-}
-impl HeaderCategory {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            HeaderCategory::Invites => "Invites",
-            HeaderCategory::Favorites => "Favorites",
-            HeaderCategory::RegularRooms => "Rooms",
-            HeaderCategory::DirectRooms => "People",
-            HeaderCategory::LowPriority => "Low Priority",
-            HeaderCategory::LeftRooms => "Left Rooms",
-            HeaderCategory::SmallStateEvents => "Room Activity",
-            HeaderCategory::None => "",
-        }
-    }
-}
-
 #[derive(Clone, Debug, DefaultNone)]
-pub enum CollapsibleHeaderAction {
+pub enum CollapsibleHeaderSmallStateAction {
     /// The header was clicked to toggled its expanded/collapsed state.
     Toggled {
         category: HeaderCategory,
@@ -110,22 +69,21 @@ pub enum CollapsibleHeaderAction {
 }
 
 #[derive(Live, LiveHook, Widget)]
-pub struct CollapsibleHeader {
+pub struct CollapsibleHeaderSmallState {
     #[deref] view: View,
     #[rust(true)] is_expanded: bool,
     #[rust] category: HeaderCategory,
 }
 
-impl Widget for CollapsibleHeader {
+impl Widget for CollapsibleHeaderSmallState {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         // Handle hits on this view as a whole before passing the event to the inner view.
-        let rooms_list_props = scope.props.get::<RoomsListScopeProps>().unwrap();
         match event.hits(cx, self.view.area()) {
             Hit::FingerDown(..) => {
                 cx.set_key_focus(self.view.area());
             }
             Hit::FingerUp(fe) => {
-                if !rooms_list_props.was_scrolling && fe.is_over && fe.is_primary_hit() && fe.was_tap() {
+                if fe.is_over && fe.is_primary_hit() && fe.was_tap() {
                     self.toggle_collapse(cx, scope);
                 }
             }
@@ -150,21 +108,21 @@ impl Widget for CollapsibleHeader {
     }
 }
 
-impl CollapsibleHeader {
+impl CollapsibleHeaderSmallState {
     fn toggle_collapse(&mut self, cx: &mut Cx, scope: &mut Scope) {
         self.is_expanded = !self.is_expanded;
         self.redraw(cx);
         cx.widget_action(
             self.widget_uid(),
             &scope.path,
-            CollapsibleHeaderAction::Toggled {
+            CollapsibleHeaderSmallStateAction::Toggled {
                 category: self.category,
             },
         );
     }
 }
 
-impl CollapsibleHeaderRef {
+impl CollapsibleHeaderSmallStateRef {
     /// Sets the category and expanded state of the header.
     pub fn set_details(
         &self,

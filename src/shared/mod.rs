@@ -3,6 +3,7 @@ use makepad_widgets::Cx;
 pub mod avatar;
 pub mod callout_tooltip;
 pub mod collapsible_header;
+pub mod collapsible_header_small_state;
 pub mod confirmation_modal;
 pub mod helpers;
 pub mod html_or_plaintext;
@@ -27,6 +28,7 @@ pub fn live_design(cx: &mut Cx) {
     icon_button::live_design(cx);
     unread_badge::live_design(cx);
     collapsible_header::live_design(cx);
+    collapsible_header_small_state::live_design(cx);
     timestamp::live_design(cx);
     room_filter_input_bar::live_design(cx);
     avatar::live_design(cx);
