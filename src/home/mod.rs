@@ -1,5 +1,6 @@
 use makepad_widgets::Cx;
 
+pub mod collapsible_small_state_manager;
 pub mod edited_indicator;
 pub mod editing_pane;
 pub mod home_screen;
