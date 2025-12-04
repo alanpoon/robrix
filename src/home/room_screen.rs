@@ -1,7 +1,7 @@
 //! A room screen is the UI view that displays a single Room's timeline of events/messages
 //! along with a message input bar at the bottom.
 
-use std::{borrow::Cow, cell::RefCell, collections::BTreeMap, ops::{DerefMut, Range}, sync::Arc};
+use std::{borrow::Cow, cell::RefCell, collections::{BTreeMap, HashMap}, ops::{DerefMut, Range}, sync::Arc};
 
 use bytesize::ByteSize;
 use imbl::Vector;
@@ -568,8 +568,9 @@ pub struct RoomScreen {
     #[rust] is_loaded: bool,
     /// Whether or not all rooms have been loaded (received from the homeserver).
     #[rust] all_rooms_loaded: bool,
-    /// Whether small state event groups are expanded.
-    #[rust] is_small_state_group_expanded: bool,
+    /// Map of small state event group IDs to their expanded/collapsed state.
+    /// Key is the timeline index where the group starts, value is whether it's expanded.
+    #[rust] small_state_group_states: HashMap<usize, bool>,
 }
 impl Drop for RoomScreen {
     fn drop(&mut self) {
@@ -711,9 +712,11 @@ impl Widget for RoomScreen {
                 }
                 
                 // Handle collapsible header toggle actions for small state events
-                if let CollapsibleHeaderSmallStateAction::Toggled { category } = action.as_widget_action().cast() {
+                if let CollapsibleHeaderSmallStateAction::Toggled { category, group_id } = action.as_widget_action().cast() {
                     if category == HeaderCategory::SmallStateEvents {
-                        self.is_small_state_group_expanded = !self.is_small_state_group_expanded;
+                        // Toggle the state for this specific group
+                        let current_state = self.small_state_group_states.get(&group_id).copied().unwrap_or(false);
+                        self.small_state_group_states.insert(group_id, !current_state);
                         self.redraw(cx);
                     }
                 }
@@ -959,18 +962,35 @@ impl Widget for RoomScreen {
                     let prev_item = if tl_idx > 0 { tl_items.get(tl_idx - 1) } else { None };
                     if should_insert_small_state_header(timeline_item, prev_item.map(|i| i.as_ref())) {
                         // Draw a collapsible header for small state events
+                        let group_id = tl_idx; // The group starts at this timeline index
+                        let is_group_expanded = self.small_state_group_states.get(&group_id).copied().unwrap_or(false);
+                        
                         let header_item = list.item(cx, item_id, id!(CollapsibleHeaderSmallState));
                         header_item.as_collapsible_header_small_state().set_details(
                             cx,
-                            self.is_small_state_group_expanded,
+                            is_group_expanded,
                             HeaderCategory::SmallStateEvents,
+                            group_id,
                             0, // No unread badge for now
                         );
                         header_item
-                    } else if is_small_state_event(timeline_item) && !self.is_small_state_group_expanded {
-                        // If this is a small state event and the group is collapsed, render as empty
-                        list.item(cx, item_id, id!(Empty))
                     } else {
+                        // For small state events, check if they should be hidden (group collapsed)
+                        let should_hide = if is_small_state_event(timeline_item) {
+                            if let Some(group_start) = find_group_start_for_item(tl_items, tl_idx) {
+                                let is_group_expanded = self.small_state_group_states.get(&group_start).copied().unwrap_or(false);
+                                !is_group_expanded
+                            } else {
+                                false // Not part of a group, don't hide
+                            }
+                        } else {
+                            false // Not a small state event, don't hide
+                        };
+
+                        if should_hide {
+                            // Group is collapsed, render as empty
+                            list.item(cx, item_id, id!(Empty))
+                        } else {
                         // Normal timeline item rendering
                         // Determine whether this item's content and profile have been drawn since the last update.
                         // Pass this state to each of the `populate_*` functions so they can attempt to re-use
@@ -1098,6 +1118,7 @@ impl Widget for RoomScreen {
                             tl_state.profile_drawn_since_last_update.insert(tl_idx .. tl_idx + 1);
                         }
                         item
+                        }
                     }
                 };
                 item.draw_all(cx, scope);
@@ -4224,6 +4245,27 @@ fn should_insert_small_state_header(
     
     // Insert header if this is the first item or previous item wasn't a small state event
     prev_item.map_or(true, |prev| !is_small_state_event(prev))
+}
+
+/// Finds the group start index for a given timeline item.
+/// Returns the timeline index where the small state group containing this item starts.
+fn find_group_start_for_item(tl_items: &Vector<Arc<TimelineItem>>, item_idx: usize) -> Option<usize> {
+    let current_item = tl_items.get(item_idx)?;
+    if !is_small_state_event(current_item) {
+        return None;
+    }
+    
+    // Search backwards to find where this group starts
+    for i in (0..=item_idx).rev() {
+        let item = tl_items.get(i)?;
+        let prev_item = if i > 0 { tl_items.get(i - 1) } else { None };
+        
+        if should_insert_small_state_header(item, prev_item.map(|i| i.as_ref())) {
+            return Some(i);
+        }
+    }
+    
+    None
 }
 
 /// Clears all UI-related timeline states for all known rooms.

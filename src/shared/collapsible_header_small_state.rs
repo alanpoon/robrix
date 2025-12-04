@@ -64,6 +64,7 @@ pub enum CollapsibleHeaderSmallStateAction {
     /// The header was clicked to toggled its expanded/collapsed state.
     Toggled {
         category: HeaderCategory,
+        group_id: usize, // Timeline index where this group starts
     },
     None,
 }
@@ -73,6 +74,7 @@ pub struct CollapsibleHeaderSmallState {
     #[deref] view: View,
     #[rust(true)] is_expanded: bool,
     #[rust] category: HeaderCategory,
+    #[rust] group_id: usize,
 }
 
 impl Widget for CollapsibleHeaderSmallState {
@@ -117,23 +119,26 @@ impl CollapsibleHeaderSmallState {
             &scope.path,
             CollapsibleHeaderSmallStateAction::Toggled {
                 category: self.category,
+                group_id: self.group_id,
             },
         );
     }
 }
 
 impl CollapsibleHeaderSmallStateRef {
-    /// Sets the category and expanded state of the header.
+    /// Sets the category, expanded state, and group ID of the header.
     pub fn set_details(
         &self,
         cx: &mut Cx,
         is_expanded: bool,
         category: HeaderCategory,
+        group_id: usize,
         num_unread_mentions: u64,
     ) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.is_expanded = is_expanded;
             inner.category = category;
+            inner.group_id = group_id;
             inner.label(ids!(label)).set_text(cx, category.as_str());
             inner.unread_badge(ids!(unread_badge)).update_counts(num_unread_mentions, 0);
         }
