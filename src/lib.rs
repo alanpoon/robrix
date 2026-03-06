@@ -39,6 +39,13 @@ pub mod tsp;
 #[cfg(not(feature = "tsp"))]
 pub mod tsp_dummy;
 
+/// All content related to Crew AI chat agent integration.
+#[cfg(feature = "crew")]
+pub mod crew;
+/// Dummy Crew module with placeholder widgets, for builds without Crew.
+#[cfg(not(feature = "crew"))]
+pub mod crew_dummy;
+
 
 // Matrix stuff
 pub mod sliding_sync;

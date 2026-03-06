@@ -3581,6 +3581,26 @@ fn populate_message_view(
         }
     }
 
+    // Check for Crew signature field in the message content.
+    #[cfg(feature = "crew")] {
+        use matrix_sdk::ruma::serde::Base64;
+
+        if let Some(crew_sig) = event_tl_item.latest_json()
+            .and_then(|raw| raw.get_field::<serde_json::Value>("content").ok())
+            .flatten()
+            .and_then(|content_obj| content_obj.get("org.robius.crew_signature").cloned())
+            .and_then(|crew_sig_value| serde_json::from_value::<Base64>(crew_sig_value).ok())
+            .map(|b64| b64.into_inner())
+        {
+            log!("Found event {:?} with Crew signature, length: {} bytes.",
+                event_tl_item.event_id(),
+                crew_sig.len()
+            );
+            // For now, we just log the presence of a Crew signature.
+            // Future implementations can verify the signature and show an indicator.
+        }
+    }
+
     (item, new_drawn_status)
 }
 

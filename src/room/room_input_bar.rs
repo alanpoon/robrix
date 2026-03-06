@@ -37,6 +37,7 @@ live_design! {
     use crate::home::editing_pane::*;
 
     use link::tsp_link::TspSignAnycastCheckbox;
+    use link::crew_link::CrewSendButton;
 
     ICO_LOCATION_PERSON = dep("crate://self/resources/icons/location-person.svg")
 
@@ -108,6 +109,10 @@ live_design! {
                 tsp_sign_checkbox = <TspSignAnycastCheckbox> {
                     margin: {bottom: 9, left: 6, right: 0}
                 }
+
+                // A button that sends the message to Crew's chat server.
+                // If Crew is not enabled, this will be an empty invisible view.
+                crew_send_button = <CrewSendButton> { }
 
                 mentionable_text_input = <MentionableTextInput> {
                     width: Fill,
@@ -295,6 +300,21 @@ impl RoomInputBar {
                 self.clear_replying_to(cx);
                 location_preview.clear();
                 location_preview.redraw(cx);
+            }
+        }
+
+        // Handle the Crew send button being clicked.
+        #[cfg(feature = "crew")]
+        if self.button(ids!(crew_send_button)).clicked(actions) {
+            let entered_text = mentionable_text_input.text().trim().to_string();
+            if !entered_text.is_empty() {
+                crate::crew::send_crew_message(&entered_text);
+            } else {
+                enqueue_popup_notification(
+                    "Please enter a message to send to Crew.",
+                    PopupKind::Warning,
+                    Some(3.0),
+                );
             }
         }
 
