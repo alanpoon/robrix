@@ -222,18 +222,9 @@ impl LiveRegister for App {
             cx.link(id!(tsp_link), id!(tsp_disabled));
         }
 
-        // If the `crew` cargo feature is enabled, we create a new "crew_link" DSL namespace
-        // and link it to the real `crew_enabled` DSL namespace, which contains real Crew widgets.
-        // If the `crew` feature is not enabled, link the "crew_link" DSL namespace
-        // to the `crew_disabled` DSL namespace instead, which defines dummy placeholder widgets.
-        #[cfg(feature = "crew")] {
-            crate::crew::live_design(cx);
-            cx.link(id!(crew_link), id!(crew_enabled));
-        }
-        #[cfg(not(feature = "crew"))] {
-            crate::crew_dummy::live_design(cx);
-            cx.link(id!(crew_link), id!(crew_disabled));
-        }
+        // Register the Crew module and link the crew_link namespace.
+        crate::crew::live_design(cx);
+        cx.link(id!(crew_link), id!(crew_enabled));
 
         crate::settings::live_design(cx);
         crate::room::live_design(cx);
@@ -295,10 +286,8 @@ impl MatchEvent for App {
             crate::tsp::tsp_init(_tokio_rt_handle.clone()).unwrap();
         }
 
-        #[cfg(feature = "crew")] {
-            log!("App::Startup: initializing Crew (AI chat agent) module.");
-            crate::crew::crew_init(_tokio_rt_handle).unwrap();
-        }
+        log!("App::Startup: initializing Crew (AI chat agent) module.");
+        crate::crew::crew_init(_tokio_rt_handle).unwrap();
     }
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {

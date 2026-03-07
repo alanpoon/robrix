@@ -304,7 +304,6 @@ impl RoomInputBar {
         }
 
         // Handle the Crew send button being clicked.
-        #[cfg(feature = "crew")]
         if self.button(ids!(crew_send_button)).clicked(actions) {
             let entered_text = mentionable_text_input.text().trim().to_string();
             if !entered_text.is_empty() {

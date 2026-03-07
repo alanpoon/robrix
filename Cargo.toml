@@ -87,17 +87,12 @@ reqwest = { version = "0.12", default-features = false, features = [
     "macos-system-configuration",
 ] }
 
-## Dependencies for Crew (AI chat agent) support.
-crew-core = { path = "../matrix-bot-sdk/crew-rs/crates/crew-core", optional = true }
-crew-bus = { path = "../matrix-bot-sdk/crew-rs/crates/crew-bus", optional = true }
 
 
 [features]
 default = []
 ## Enables experimental support for using TSP wallets.
 tsp = ["dep:tsp_sdk", "dep:quinn", "dep:aws-lc-rs", "dep:percent-encoding"]
-## Enables experimental support for Crew AI chat agent integration.
-crew = ["dep:crew-core", "dep:crew-bus"]
 
 ## Hides the command prompt console on Windows.
 hide_windows_console = []

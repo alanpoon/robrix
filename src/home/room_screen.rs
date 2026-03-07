@@ -3582,7 +3582,7 @@ fn populate_message_view(
     }
 
     // Check for Crew signature field in the message content.
-    #[cfg(feature = "crew")] {
+    {
         use matrix_sdk::ruma::serde::Base64;
 
         if let Some(crew_sig) = event_tl_item.latest_json()
