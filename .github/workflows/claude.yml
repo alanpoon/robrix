@@ -1,0 +1,61 @@
+name: Claude Code
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude:
+    # Run when:
+    # 1. Issue/PR comment contains @claude
+    # 2. Issue is labeled with 'claude'
+    # 3. Issue is assigned to 'claude-code[bot]' or contains @claude mention
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.labels.*.name, 'claude') || contains(github.event.issue.body, '@claude'))) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Optionally restrict to specific users/teams
+          # allowed_users: "maintainer1,maintainer2"
+          # Optionally set a custom model
+          # model: "claude-sonnet-4-20250514"
+
+          # Custom prompt to provide context about the project
+          custom_prompt: |
+            You are helping with Robrix, a Matrix chat client written in pure Rust using the Makepad UI framework and the Project Robius app dev framework.
+
+            Key project details:
+            - This is a Rust project using Makepad for the UI
+            - The project supports multiple platforms: macOS, Windows, Linux, Android, and iOS
+            - Main dependencies: makepad-widgets, matrix-sdk, tokio
+            - Build profiles: dev, debug-opt, release-lto, distribution, fast
+
+            When reviewing PRs or helping with issues:
+            - Focus on Rust best practices and idiomatic code
+            - Be aware of the Makepad DSL syntax in .rs files
+            - Consider cross-platform compatibility
+            - Check for potential memory safety issues
+            - Suggest using existing project patterns where applicable
