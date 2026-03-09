@@ -217,6 +217,9 @@ impl Widget for RoomInputBar {
             self.handle_actions(cx, actions, room_screen_props);
         }
 
+        // Handle HTTP responses from Crew
+        crate::crew::handle_crew_response(cx, event);
+
         self.view.handle_event(cx, event, scope);
     }
 
@@ -307,7 +310,7 @@ impl RoomInputBar {
         if self.button(ids!(crew_send_button)).clicked(actions) {
             let entered_text = mentionable_text_input.text().trim().to_string();
             if !entered_text.is_empty() {
-                crate::crew::send_crew_message(&entered_text);
+                crate::crew::send_crew_message(cx, &entered_text);
             } else {
                 enqueue_popup_notification(
                     "Please enter a message to send to Crew.",

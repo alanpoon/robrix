@@ -285,9 +285,6 @@ impl MatchEvent for App {
             log!("App::Startup: initializing TSP (Trust Spanning Protocol) module.");
             crate::tsp::tsp_init(_tokio_rt_handle.clone()).unwrap();
         }
-
-        log!("App::Startup: initializing Crew (AI chat agent) module.");
-        crate::crew::crew_init(_tokio_rt_handle).unwrap();
     }
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
