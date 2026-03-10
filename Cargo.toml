@@ -16,6 +16,34 @@ repository = "https://github.com/project-robius/robrix"
 version = "0.0.1-pre-alpha-4"
 metadata.makepad-auto-version = "zqpv-Yj-K7WNVK2I8h5Okhho46Q="
 
+[[bin]]
+name = "robrix"
+path = "src/main.rs"
+
+[[bin]]
+name = "crew-bot"
+path = "src/bin/crew_bot.rs"
+
+[[bin]]
+name = "crew-test-client"
+path = "src/bin/crew_test_client.rs"
+
+[[bin]]
+name = "botfather"
+path = "src/bin/botfather.rs"
+
+[[bin]]
+name = "matrix-login"
+path = "src/bin/matrix_login.rs"
+
+[[bin]]
+name = "simple-login"
+path = "src/bin/simple_login.rs"
+
+[[bin]]
+name = "dm-test"
+path = "src/bin/dm_test.rs"
+
 [dependencies]
 makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
 makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }
@@ -86,6 +114,8 @@ reqwest = { version = "0.12", default-features = false, features = [
     "http2",
     "macos-system-configuration",
 ] }
+## HTTP client for crew bot (using ureq instead of reqwest as per spec)
+ureq = { version = "2.10", features = ["json"] }
 
 
 

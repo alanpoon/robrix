@@ -1,0 +1,10 @@
+[
+    {
+    "username": "testclient2",
+    "password": "testpassword",
+    "room_id": "!boGXWPFThNvfGRFFyB:localhost",
+    "homeserver": "http://localhost:8008",
+    "crew_api_url": "http://localhost:8080",
+    "crew_api_token": "Bearer my-secret"
+  }
+]

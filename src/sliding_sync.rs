@@ -120,15 +120,38 @@ async fn build_client(
         .unwrap_or("https://matrix-client.matrix.org/");
         // .unwrap_or("https://matrix.org/");
 
+    // Ensure the homeserver URL is a proper URL (add https:// if missing)
+    let mut homeserver_url = if homeserver_url.starts_with("http://") || homeserver_url.starts_with("https://") {
+        homeserver_url.to_string()
+    } else {
+        format!("https://{}", homeserver_url)
+    };
+
+    // Strip trailing slash if present (matrix-sdk requires URLs without trailing slashes)
+    if homeserver_url.ends_with('/') {
+        homeserver_url.pop();
+    }
+
+    // For localhost/local development, create an HTTP client that accepts self-signed certificates
+    let http_client = if homeserver_url.contains("localhost") || homeserver_url.contains("127.0.0.1") {
+        reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .expect("Failed to create HTTP client for local development")
+    } else {
+        reqwest::Client::new()
+    };
+
     let mut builder = Client::builder()
-        .server_name_or_homeserver_url(homeserver_url)
+        .homeserver_url(&homeserver_url)
+        .http_client(http_client)
         // Use a sqlite database to persist the client's encryption setup.
         .sqlite_store(&db_path, Some(&passphrase))
         .with_threading_support(matrix_sdk::ThreadingSupport::Enabled {
             with_subscriptions: true,
         })
         // The sliding sync proxy has now been deprecated in favor of native sliding sync.
-        .sliding_sync_version_builder(VersionBuilder::DiscoverNative)
+        .sliding_sync_version_builder(VersionBuilder::None)
         .with_decryption_settings(DecryptionSettings {
             sender_device_trust_requirement: TrustRequirement::Untrusted,
         })

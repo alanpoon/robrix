@@ -42,7 +42,6 @@ pub mod tsp_dummy;
 /// All content related to Crew AI chat agent integration.
 pub mod crew;
 
-
 // Matrix stuff
 pub mod sliding_sync;
 pub mod space_service_sync;

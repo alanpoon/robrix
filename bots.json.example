@@ -1,0 +1,24 @@
+[
+  {
+    "username": "crew_bot",
+    "password": "your_password_here",
+    "homeserver": "https://matrix.org",
+    "room_id": "!abc123:matrix.org",
+    "crew_api_url": "http://localhost:8080",
+    "crew_api_token": "Bearer my-secret"
+  }
+]
+  - Homeserver URL: http://localhost:8008                                                                              
+  - Username: @testuser:localhost                                                                                      
+  - Password: testpassword  
+
+
+curl -X POST http://localhost:8008/_synapse/admin/v1/register \                                                      
+  -H "Content-Type: application/json" \                                                                              
+  -d '{                                                                                                              
+    "nonce": "any-random-string",                                                                                    
+    "username": "testuser",                                                                                          
+    "password": "testpassword",                                                                                      
+    "admin": false,                                                                                                  
+    "mac": "dummy"                                                                                                   
+  }'
