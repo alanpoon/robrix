@@ -9,7 +9,7 @@ use matrix_sdk::{
     },
     Client, Room, RoomState,
 };
-use serde::{Deserialize, Serialize};
+use robrix::crew::matrix_handler::{self, CrewConfig};
 use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout, Duration};
 
@@ -18,18 +18,6 @@ const USER1_NAME: &str = "testuser";
 const USER2_NAME: &str = "testuser2";
 const PASSWORD: &str = "testpassword";
 const TEST_MESSAGE: &str = "Hello from testuser! This is a test message.";
-
-/// Request body for the /api/chat endpoint.
-#[derive(Debug, Clone, Serialize)]
-struct ChatRequest {
-    message: String,
-}
-
-/// Response from the /api/chat endpoint.
-#[derive(Debug, Clone, Deserialize)]
-struct ChatResponse {
-    content: String,
-}
 
 /// Create and login a Matrix client
 async fn create_client(username: &str, password: &str, db_path: &str) -> Result<Client> {
@@ -130,7 +118,7 @@ async fn main() -> Result<()> {
 
     // Start syncing for user2 in background
     let client2_clone = client2.clone();
-    let sync_handle2 = tokio::spawn(async move {
+    let _sync_handle2 = tokio::spawn(async move {
         println!("[testuser2] 👂 Started listening for messages...");
         let settings = SyncSettings::default().timeout(Duration::from_secs(30));
         loop {
@@ -146,7 +134,7 @@ async fn main() -> Result<()> {
 
     // Start syncing for user1 in background
     let client1_clone = client1.clone();
-    let sync_handle1 = tokio::spawn(async move {
+    let _sync_handle1 = tokio::spawn(async move {
         println!("[testuser] 👂 Started listening for messages...");
         let settings = SyncSettings::default().timeout(Duration::from_secs(30));
         loop {
@@ -252,62 +240,45 @@ async fn main() -> Result<()> {
                 .context("Failed to get room for user2")?;
 
             println!();
-            println!("[testuser2] 📡 Calling API at http://127.0.0.1:8080/api/chat...");
+            println!("[testuser2] 📡 Calling Crew API at http://127.0.0.1:8080/api/chat...");
 
-            let http_client = reqwest::Client::builder()
-                .no_proxy()
-                .build()?;
-
-            let request_body = ChatRequest {
-                message: "give me streaming response".to_owned(),
+            // Use the crew module to call API and send response
+            let crew_config = CrewConfig {
+                api_url: "http://127.0.0.1:8080".to_string(),
+                api_token: "my-secret".to_string(),
             };
 
-            // Send chat message via POST
-            let post_response = http_client
-                .post("http://127.0.0.1:8080/api/chat")
-                .bearer_auth("my-secret")
-                .json(&request_body)
-                .send()
-                .await?;
+            match matrix_handler::call_crew_api(&crew_config, "give me streaming response").await {
+                Ok(content) => {
+                    println!("[testuser2] ✅ API returned content: \"{}\"", content);
 
-            // Check status code
-            let status = post_response.status();
-            println!("[testuser2] API response status: {}", status);
+                    // Send the content back to testuser as a Matrix message
+                    println!("[testuser2] 📤 Sending API response back to testuser...");
+                    let reply_content = RoomMessageEventContent::text_plain(&content);
+                    room2.send(reply_content).await.context("Failed to send reply message")?;
+                    println!("[testuser2] ✅ Reply sent");
 
-            if status == reqwest::StatusCode::OK {
-                // Parse JSON response
-                let chat_response: ChatResponse = post_response.json().await
-                    .context("Failed to parse API response as JSON")?;
+                    // Wait for testuser to receive the reply
+                    println!();
+                    println!("[testuser] ⏳ Waiting for reply message...");
 
-                println!("[testuser2] ✅ API returned content: \"{}\"", chat_response.content);
-
-                // Send the content back to testuser as a Matrix message
-                println!("[testuser2] 📤 Sending API response back to testuser...");
-                let reply_content = RoomMessageEventContent::text_plain(&chat_response.content);
-                room2.send(reply_content).await.context("Failed to send reply message")?;
-                println!("[testuser2] ✅ Reply sent");
-
-                // Wait for testuser to receive the reply
-                println!();
-                println!("[testuser] ⏳ Waiting for reply message...");
-
-                match timeout(Duration::from_secs(20), user1_received_rx.recv()).await {
-                    Ok(Some(reply_message)) => {
-                        println!();
-                        println!("✅ SUCCESS! Reply received by testuser");
-                        println!("   Reply content: \"{}\"", reply_message);
-                    }
-                    Ok(None) => {
-                        eprintln!("❌ Channel closed without receiving reply");
-                    }
-                    Err(_) => {
-                        eprintln!("❌ Timeout waiting for reply");
+                    match timeout(Duration::from_secs(20), user1_received_rx.recv()).await {
+                        Ok(Some(reply_message)) => {
+                            println!();
+                            println!("✅ SUCCESS! Reply received by testuser");
+                            println!("   Reply content: \"{}\"", reply_message);
+                        }
+                        Ok(None) => {
+                            eprintln!("❌ Channel closed without receiving reply");
+                        }
+                        Err(_) => {
+                            eprintln!("❌ Timeout waiting for reply");
+                        }
                     }
                 }
-            } else {
-                eprintln!("❌ API returned non-200 status: {}", status);
-                let error_text = post_response.text().await.unwrap_or_else(|_| "Unable to read response".to_string());
-                eprintln!("   Error response: {}", error_text);
+                Err(e) => {
+                    eprintln!("[testuser2] ❌ Crew API error: {}", e);
+                }
             }
         }
         Ok(None) => {
@@ -319,13 +290,10 @@ async fn main() -> Result<()> {
     }
 
     // Teardown
-    return Ok(());
     println!();
     println!("🧹 Tearing down...");
 
-    // Stop the sync loops
-    sync_handle1.abort();
-    sync_handle2.abort();
+    // Note: Sync handles will be automatically dropped when they go out of scope
 
     println!("   Cleaning up databases...");
     drop(client1);

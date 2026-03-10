@@ -44,6 +44,14 @@ path = "src/bin/simple_login.rs"
 name = "dm-test"
 path = "src/bin/dm_test.rs"
 
+[[bin]]
+name = "dm-cli"
+path = "src/bin/dm_cli.rs"
+
+[[bin]]
+name = "dm-cli-to-bot"
+path = "src/bin/dm_cli_to_bot.rs"
+
 [dependencies]
 makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
 makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }

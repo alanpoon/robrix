@@ -1,11 +1,30 @@
+# Configuration file for botfather and dm-cli-to-bot
+#
+# botfather: Reads this file and spawns a bot for each entry
+# dm-cli-to-bot: Uses the room_id from the matching username entry
+#
+# Each bot will:
+# - Login with the provided username/password
+# - Auto-accept DM invitations (if room_id is not specified)
+# - Monitor messages in all rooms (or specific room_id if provided)
+# - Respond to messages starting with "!crew " by calling the Crew API
+#
+# Fields:
+# - username (required): Bot's Matrix username (without @ prefix)
+# - password (required): Bot's password
+# - homeserver (required): Matrix homeserver URL
+# - room_id (optional): Specific room to monitor. If omitted, bot accepts all DM invitations
+# - crew_api_url (optional): Crew API base URL (default: http://localhost:8080)
+# - crew_api_token (optional): API authorization token (default: my-secret)
+
 [
   {
-    "username": "crew_bot",
-    "password": "your_password_here",
-    "homeserver": "https://matrix.org",
-    "room_id": "!abc123:matrix.org",
+    "username": "testuser2",
+    "password": "testpassword",
+    "homeserver": "http://localhost:8008",
+    "room_id": "!abc123:localhost",
     "crew_api_url": "http://localhost:8080",
-    "crew_api_token": "Bearer my-secret"
+    "crew_api_token": "my-secret"
   }
 ]
   - Homeserver URL: http://localhost:8008                                                                              

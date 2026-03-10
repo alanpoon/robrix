@@ -1,0 +1,234 @@
+use anyhow::{Context, Result};
+use matrix_sdk::{
+    config::SyncSettings,
+    ruma::{
+        events::room::message::{
+            MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
+        },
+        OwnedRoomId, UserId,
+    },
+    Client, Room,
+};
+use serde::Deserialize;
+use std::fs;
+use std::io::{self, BufRead, Write};
+use tokio::sync::mpsc;
+use tokio::time::Duration;
+
+const HOMESERVER: &str = "http://localhost:8008";
+const USERNAME: &str = "testuser";
+const PASSWORD: &str = "testpassword";
+const TARGET_USER: &str = "@testuser2:localhost";
+
+/// Configuration for a bot from bots.json
+#[derive(Debug, Deserialize)]
+struct BotConfig {
+    username: String,
+    #[allow(dead_code)]
+    password: String,
+    #[allow(dead_code)]
+    homeserver: String,
+    room_id: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    crew_api_url: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    crew_api_token: String,
+}
+
+/// Read bots.json and find room_id for the target user
+fn get_room_id_from_config(target_username: &str) -> Result<Option<String>> {
+    let config_path = "bots.json";
+
+    // Check if file exists
+    if !std::path::Path::new(config_path).exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(config_path)
+        .context("Failed to read bots.json")?;
+
+    let configs: Vec<BotConfig> = serde_json::from_str(&content)
+        .context("Failed to parse bots.json")?;
+
+    // Find config where username matches target
+    for config in configs {
+        if config.username == target_username {
+            return Ok(config.room_id);
+        }
+    }
+
+    Ok(None)
+}
+
+/// Handle incoming messages and print them to stdout
+async fn handle_message(
+    event: OriginalSyncRoomMessageEvent,
+    _room: Room,
+    my_user_id: &UserId,
+    target_user_id: &UserId,
+) {
+    // Don't print messages from ourselves
+    if event.sender == my_user_id {
+        return;
+    }
+
+    // Only print messages from testuser2
+    if event.sender == target_user_id {
+        if let MessageType::Text(text_content) = &event.content.msgtype {
+            let message = &text_content.body;
+            println!("\n📨 Message received from {}: {}", event.sender, message);
+            print!("> ");
+            io::stdout().flush().unwrap();
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Set NO_PROXY to bypass proxy for localhost
+    unsafe {
+        std::env::set_var("NO_PROXY", "localhost,127.0.0.1");
+        std::env::set_var("no_proxy", "localhost,127.0.0.1");
+    }
+
+    tracing_subscriber::fmt::init();
+
+    println!("🚀 Matrix DM CLI to Bot");
+    println!("   Sending to: {}", TARGET_USER);
+    println!("   Logging in as {}...", USERNAME);
+
+    // Clean up old database to avoid device mismatch
+    let db_path = "/tmp/dm_cli_to_bot.db";
+    let _ = std::fs::remove_dir_all(db_path);
+
+    // Create client
+    let client = Client::builder()
+        .homeserver_url(HOMESERVER)
+        .sqlite_store(db_path, None)
+        .build()
+        .await
+        .context("Failed to create Matrix client")?;
+
+    // Login
+    client
+        .matrix_auth()
+        .login_username(USERNAME, PASSWORD)
+        .initial_device_display_name("DM CLI to Bot")
+        .await
+        .context("Failed to login")?;
+
+    let my_user_id = client.user_id().unwrap().to_owned();
+    println!("✅ Logged in as {}", my_user_id);
+
+    // Perform initial sync
+    println!("🔄 Performing initial sync...");
+    client.sync_once(SyncSettings::default()).await?;
+
+    // Get target user ID
+    let target_user_id: Box<UserId> = TARGET_USER.parse()
+        .context("Invalid target user ID format")?;
+
+    // Extract username from target user ID (e.g., "@testuser2:localhost" -> "testuser2")
+    let target_username = target_user_id.localpart();
+
+    // Try to get room_id from bots.json
+    println!("🔍 Looking for room_id in bots.json for user '{}'...", target_username);
+    let room_id_str = get_room_id_from_config(target_username)?
+        .context("No room_id found in bots.json for target user. Please add an entry with username and room_id.")?;
+
+    println!("✅ Found room_id in config: {}", room_id_str);
+
+    // Parse room ID and get the room
+    let room_id: OwnedRoomId = room_id_str
+        .parse()
+        .context("Invalid room ID format in bots.json")?;
+
+    let room = client
+        .get_room(&room_id)
+        .context("Room not found. Make sure the bot has joined this room.")?;
+
+    println!("✅ Using room: {}", room_id);
+
+    // Set up event handler for incoming messages from testuser2
+    let my_user_id_clone = my_user_id.clone();
+    let target_user_id_clone = target_user_id.clone();
+    client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, room: Room| {
+        let user_id = my_user_id_clone.clone();
+        let target_id = target_user_id_clone.clone();
+        async move {
+            handle_message(event, room, &user_id, &target_id).await;
+        }
+    });
+
+    // Channel to send messages from stdin thread to async runtime
+    let (message_tx, mut message_rx) = mpsc::unbounded_channel::<String>();
+
+    // Start sync loop in background
+    let client_clone = client.clone();
+    let _sync_handle = tokio::spawn(async move {
+        let settings = SyncSettings::default().timeout(Duration::from_secs(30));
+        loop {
+            match client_clone.sync_once(settings.clone()).await {
+                Ok(_) => {},
+                Err(e) => {
+                    eprintln!("\n❌ Sync error: {}", e);
+                }
+            }
+        }
+    });
+
+    // Start stdin reader in blocking thread
+    let _stdin_handle = std::thread::spawn(move || {
+        let stdin = io::stdin();
+        let reader = stdin.lock();
+
+        for line in reader.lines() {
+            match line {
+                Ok(message) => {
+                    if message_tx.send(message).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error reading stdin: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    println!("\n💬 Chat ready! Type your message and press Enter to send to {}.", TARGET_USER);
+    println!("📨 Listening for messages from {}...", TARGET_USER);
+    println!("   (Press Ctrl+C to quit)\n");
+    print!("> ");
+    io::stdout().flush()?;
+
+    // Main message sending loop
+    while let Some(message) = message_rx.recv().await {
+        let message = message.trim();
+
+        if message.is_empty() {
+            print!("> ");
+            io::stdout().flush()?;
+            continue;
+        }
+
+        // Send message to room
+        let content = RoomMessageEventContent::text_plain(message);
+        match room.send(content).await {
+            Ok(_) => {
+                // Message sent successfully
+            }
+            Err(e) => {
+                eprintln!("❌ Failed to send message: {}", e);
+            }
+        }
+
+        print!("> ");
+        io::stdout().flush()?;
+    }
+
+    Ok(())
+}

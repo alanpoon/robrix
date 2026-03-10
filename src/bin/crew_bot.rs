@@ -12,7 +12,7 @@ use matrix_sdk::{
     },
     Client, Room, RoomState,
 };
-use serde::{Deserialize, Serialize};
+use robrix::crew::matrix_handler::{self, CrewConfig};
 use tokio::time::{sleep, Duration};
 
 /// Matrix Crew Bot - Forwards crew messages to Crew API and posts responses back
@@ -44,16 +44,6 @@ struct Args {
     crew_api_token: String,
 }
 
-#[derive(Debug, Serialize)]
-struct CrewRequest {
-    message: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CrewResponse {
-    response: String,
-}
-
 /// Check if a message is a crew message (starts with "!crew ")
 fn is_crew_message(body: &str) -> bool {
     body.trim_start().starts_with("!crew ")
@@ -65,34 +55,6 @@ fn extract_crew_content(body: &str) -> String {
         .strip_prefix("!crew ")
         .unwrap_or("")
         .to_string()
-}
-
-/// Send a message to the Crew API and get the response
-fn send_to_crew_api(
-    api_url: &str,
-    auth_token: &str,
-    message: &str,
-) -> Result<String> {
-    let endpoint = format!("{}/api/chat", api_url);
-    let request_body = CrewRequest {
-        message: message.to_string(),
-    };
-
-    println!("🤖 Sending to Crew API: {}", message);
-
-    let response = ureq::post(&endpoint)
-        .set("Authorization", auth_token)
-        .set("Content-Type", "application/json")
-        .send_json(&request_body)
-        .context("Failed to send request to Crew API")?;
-
-    let crew_response: CrewResponse = response
-        .into_json()
-        .context("Failed to parse Crew API response")?;
-
-    println!("✅ Received from Crew API: {}", crew_response.response);
-
-    Ok(crew_response.response)
 }
 
 /// Handle incoming room messages
@@ -121,9 +83,18 @@ async fn handle_message(
         let crew_content = extract_crew_content(body);
         println!("🔍 Detected crew message: {}", crew_content);
 
-        // Send to Crew API
-        match send_to_crew_api(crew_api_url, crew_api_token, &crew_content) {
+        // Create crew config and send to Crew API
+        let crew_config = CrewConfig {
+            api_url: crew_api_url.to_string(),
+            api_token: crew_api_token.to_string(),
+        };
+
+        println!("🤖 Sending to Crew API: {}", crew_content);
+
+        match matrix_handler::call_crew_api(&crew_config, &crew_content).await {
             Ok(response) => {
+                println!("✅ Received from Crew API: {}", response);
+
                 // Format the response with "Crew:" prefix to indicate it's from the bot
                 let formatted_response = format!("🤖 Crew Response:\n{}", response);
 

@@ -6,6 +6,7 @@ use makepad_widgets::makepad_micro_serde::{SerJson, DeJson, SerJsonState, DeJson
 use crate::shared::popup_list::{enqueue_popup_notification, PopupKind};
 
 pub mod crew_send_button;
+pub mod matrix_handler;
 
 pub fn live_design(cx: &mut Cx) {
     crew_send_button::live_design(cx);

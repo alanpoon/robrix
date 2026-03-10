@@ -1,32 +1,36 @@
+use anyhow::{Context, Result};
+use matrix_sdk::{
+    config::SyncSettings,
+    ruma::{
+        events::room::{
+            member::StrippedRoomMemberEvent,
+            message::{
+                MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
+            },
+        },
+        OwnedRoomId, OwnedUserId,
+    },
+    Client, Room, RoomState,
+};
+use robrix::crew::matrix_handler::{self, CrewConfig};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-
-use anyhow::{Context, Result};
-use matrix_sdk::{
-    config::SyncSettings,
-    ruma::{
-        events::room::message::{
-            MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
-        },
-        OwnedRoomId, OwnedUserId,
-    },
-    Client, Room,
-};
-use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
 /// Configuration for a single bot
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash)]
 struct BotConfig {
     username: String,
     password: String,
     homeserver: String,
-    room_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    room_id: Option<String>,
     #[serde(default = "default_crew_api_url")]
     crew_api_url: String,
     #[serde(default = "default_crew_api_token")]
@@ -38,17 +42,7 @@ fn default_crew_api_url() -> String {
 }
 
 fn default_crew_api_token() -> String {
-    "Bearer my-secret".to_string()
-}
-
-#[derive(Debug, Serialize)]
-struct CrewRequest {
-    message: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CrewResponse {
-    response: String,
+    "my-secret".to_string()
 }
 
 /// Check if a message is a crew message (starts with "!crew ")
@@ -64,33 +58,12 @@ fn extract_crew_content(body: &str) -> String {
         .to_string()
 }
 
-/// Send a message to the Crew API and get the response
-fn send_to_crew_api(api_url: &str, auth_token: &str, message: &str) -> Result<String> {
-    let endpoint = format!("{}/api/chat", api_url);
-    let request_body = CrewRequest {
-        message: message.to_string(),
-    };
-
-    let response = ureq::post(&endpoint)
-        .set("Authorization", auth_token)
-        .set("Content-Type", "application/json")
-        .send_json(&request_body)
-        .context("Failed to send request to Crew API")?;
-
-    let crew_response: CrewResponse = response
-        .into_json()
-        .context("Failed to parse Crew API response")?;
-
-    Ok(crew_response.response)
-}
-
 /// Handle incoming room messages for a bot
 async fn handle_message(
     event: OriginalSyncRoomMessageEvent,
     room: Room,
     bot_user_id: &OwnedUserId,
-    crew_api_url: &str,
-    crew_api_token: &str,
+    crew_config: &CrewConfig,
     bot_username: &str,
 ) -> Result<()> {
     // Ignore messages from the bot itself to prevent loops
@@ -103,9 +76,18 @@ async fn handle_message(
     };
 
     let body = &text_content.body;
+
+    // Get room name for display
+    let room_name = room
+        .display_name()
+        .await
+        .ok()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| format!("{}", room.room_id()));
+
     println!(
-        "[{}] 📨 Received message from {}: {}",
-        bot_username, event.sender, body
+        "[{}] 📨 [{}] {} → {}",
+        bot_username, room_name, event.sender, body
     );
 
     // Check if it's a crew message
@@ -113,8 +95,8 @@ async fn handle_message(
         let crew_content = extract_crew_content(body);
         println!("[{}] 🔍 Detected crew message: {}", bot_username, crew_content);
 
-        // Send to Crew API
-        match send_to_crew_api(crew_api_url, crew_api_token, &crew_content) {
+        // Call crew API using matrix_handler
+        match matrix_handler::call_crew_api(crew_config, &crew_content).await {
             Ok(response) => {
                 let formatted_response = format!("🤖 Crew Response:\n{}", response);
                 let content = RoomMessageEventContent::text_plain(&formatted_response);
@@ -139,7 +121,11 @@ async fn run_bot(config: BotConfig) -> Result<()> {
 
     println!("[{}] 🚀 Starting bot", bot_username);
     println!("[{}]    Homeserver: {}", bot_username, config.homeserver);
-    println!("[{}]    Room ID: {}", bot_username, config.room_id);
+    if let Some(ref room_id) = config.room_id {
+        println!("[{}]    Room ID: {}", bot_username, room_id);
+    } else {
+        println!("[{}]    Mode: Auto-accept DM invitations", bot_username);
+    }
     println!("[{}]    Crew API: {}", bot_username, config.crew_api_url);
 
     // Create Matrix client
@@ -170,33 +156,57 @@ async fn run_bot(config: BotConfig) -> Result<()> {
         .await
         .context("Initial sync failed")?;
 
-    // Get the room
-    let room_id: OwnedRoomId = config.room_id
-        .parse()
-        .context("Invalid room ID format")?;
-    let room = client
-        .get_room(&room_id)
-        .context("Room not found")?;
+    // If a specific room_id is provided, try to get it
+    if let Some(ref room_id_str) = config.room_id {
+        let room_id: OwnedRoomId = room_id_str
+            .parse()
+            .context("Invalid room ID format")?;
 
-    let room_name = room
-        .display_name()
-        .await
-        .ok()
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| "Unknown".to_string());
-    println!("[{}] ✅ Found room: {}", bot_username, room_name);
+        if let Some(room) = client.get_room(&room_id) {
+            let room_name = room
+                .display_name()
+                .await
+                .ok()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "Unknown".to_string());
+            println!("[{}] ✅ Found room: {}", bot_username, room_name);
+        } else {
+            println!("[{}] ⚠️  Room {} not found, will wait for invitations", bot_username, room_id);
+        }
+    }
 
-    // Clone values for use in the closure
-    let crew_api_url = Arc::new(config.crew_api_url);
-    let crew_api_token = Arc::new(config.crew_api_token);
+    // Create crew config
+    let crew_config = Arc::new(CrewConfig {
+        api_url: config.crew_api_url,
+        api_token: config.crew_api_token,
+    });
+
     let bot_username_arc = Arc::new(bot_username.clone());
+
+    // Register event handler for room invitations (auto-accept)
+    let bot_username_invite = bot_username.clone();
+    client.add_event_handler(move |_event: StrippedRoomMemberEvent, room: Room| {
+        let username = bot_username_invite.clone();
+        async move {
+            if room.state() == RoomState::Invited {
+                println!("[{}] 📨 Received invitation to room {}", username, room.room_id());
+                match room.join().await {
+                    Ok(_) => {
+                        println!("[{}] ✅ Automatically accepted invitation", username);
+                    }
+                    Err(e) => {
+                        eprintln!("[{}] ❌ Failed to accept invitation: {}", username, e);
+                    }
+                }
+            }
+        }
+    });
 
     // Register event handler for room messages
     client.add_event_handler(
         move |event: OriginalSyncRoomMessageEvent, room: Room| {
             let bot_user_id = bot_user_id.clone();
-            let crew_api_url = Arc::clone(&crew_api_url);
-            let crew_api_token = Arc::clone(&crew_api_token);
+            let crew_config = Arc::clone(&crew_config);
             let bot_username = Arc::clone(&bot_username_arc);
 
             async move {
@@ -204,8 +214,7 @@ async fn run_bot(config: BotConfig) -> Result<()> {
                     event,
                     room,
                     &bot_user_id,
-                    &crew_api_url,
-                    &crew_api_token,
+                    &crew_config,
                     &bot_username,
                 )
                 .await
@@ -266,7 +275,7 @@ impl BotManager {
             }
         }
 
-        println!("[{}] ▶️  Starting bot...", username);
+        println!("[{}] ▶️  Starting bot... {:?}", username, config);
 
         let handle = tokio::spawn(async move {
             if let Err(e) = run_bot(config).await {
@@ -317,6 +326,12 @@ impl BotManager {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Set NO_PROXY to bypass proxy for localhost
+    unsafe {
+        std::env::set_var("NO_PROXY", "localhost,127.0.0.1");
+        std::env::set_var("no_proxy", "localhost,127.0.0.1");
+    }
+
     tracing_subscriber::fmt::init();
 
     println!("🤖 BotFather - Matrix Bot Manager");
