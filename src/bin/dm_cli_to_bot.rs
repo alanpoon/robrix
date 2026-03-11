@@ -12,8 +12,10 @@ use matrix_sdk::{
 use serde::Deserialize;
 use std::fs;
 use std::io::{self, BufRead, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::time::Duration;
+use tokio::time::{Duration, sleep};
 
 const HOMESERVER: &str = "http://localhost:8008";
 const USERNAME: &str = "testuser";
@@ -68,6 +70,7 @@ async fn handle_message(
     _room: Room,
     my_user_id: &UserId,
     target_user_id: &UserId,
+    response_received: Arc<AtomicBool>,
 ) {
     // Don't print messages from ourselves
     if event.sender == my_user_id {
@@ -79,6 +82,7 @@ async fn handle_message(
         if let MessageType::Text(text_content) = &event.content.msgtype {
             let message = &text_content.body;
             println!("\n📨 Message received from {}: {}", event.sender, message);
+            response_received.store(true, Ordering::SeqCst);
             print!("> ");
             io::stdout().flush().unwrap();
         }
@@ -99,14 +103,9 @@ async fn main() -> Result<()> {
     println!("   Sending to: {}", TARGET_USER);
     println!("   Logging in as {}...", USERNAME);
 
-    // Clean up old database to avoid device mismatch
-    let db_path = "/tmp/dm_cli_to_bot.db";
-    let _ = std::fs::remove_dir_all(db_path);
-
-    // Create client
+    // Create client (without persistent storage for now)
     let client = Client::builder()
         .homeserver_url(HOMESERVER)
-        .sqlite_store(db_path, None)
         .build()
         .await
         .context("Failed to create Matrix client")?;
@@ -151,14 +150,19 @@ async fn main() -> Result<()> {
 
     println!("✅ Using room: {}", room_id);
 
+    // Flag to track if we received a response
+    let response_received = Arc::new(AtomicBool::new(false));
+
     // Set up event handler for incoming messages from testuser2
     let my_user_id_clone = my_user_id.clone();
     let target_user_id_clone = target_user_id.clone();
+    let response_received_clone = Arc::clone(&response_received);
     client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, room: Room| {
         let user_id = my_user_id_clone.clone();
         let target_id = target_user_id_clone.clone();
+        let response_flag = Arc::clone(&response_received_clone);
         async move {
-            handle_message(event, room, &user_id, &target_id).await;
+            handle_message(event, room, &user_id, &target_id, response_flag).await;
         }
     });
 
@@ -205,6 +209,9 @@ async fn main() -> Result<()> {
     print!("> ");
     io::stdout().flush()?;
 
+    // Track if we sent a message (for waiting for response)
+    let mut sent_message = false;
+
     // Main message sending loop
     while let Some(message) = message_rx.recv().await {
         let message = message.trim();
@@ -219,7 +226,8 @@ async fn main() -> Result<()> {
         let content = RoomMessageEventContent::text_plain(message);
         match room.send(content).await {
             Ok(_) => {
-                // Message sent successfully
+                println!("✅ Message sent: {}", message);
+                sent_message = true;
             }
             Err(e) => {
                 eprintln!("❌ Failed to send message: {}", e);
@@ -228,6 +236,26 @@ async fn main() -> Result<()> {
 
         print!("> ");
         io::stdout().flush()?;
+    }
+
+    // If we sent a message, wait for a response (up to 30 seconds)
+    if sent_message {
+        println!("\n⏳ Waiting for response from {}...", TARGET_USER);
+        let timeout_secs = 30;
+        for i in 0..timeout_secs {
+            if response_received.load(Ordering::SeqCst) {
+                println!("✅ Response received!");
+                sleep(Duration::from_secs(1)).await; // Give time to print the message
+                break;
+            }
+            sleep(Duration::from_secs(1)).await;
+            if (i + 1) % 5 == 0 {
+                println!("   Still waiting... ({}/{}s)", i + 1, timeout_secs);
+            }
+        }
+        if !response_received.load(Ordering::SeqCst) {
+            println!("⏰ Timeout waiting for response");
+        }
     }
 
     Ok(())

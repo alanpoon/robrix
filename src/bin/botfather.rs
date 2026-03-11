@@ -3,6 +3,7 @@ use matrix_sdk::{
     config::SyncSettings,
     ruma::{
         events::room::{
+            encrypted::OriginalSyncRoomEncryptedEvent,
             member::StrippedRoomMemberEvent,
             message::{
                 MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
@@ -128,7 +129,7 @@ async fn run_bot(config: BotConfig) -> Result<()> {
     }
     println!("[{}]    Crew API: {}", bot_username, config.crew_api_url);
 
-    // Create Matrix client
+    // Create Matrix client (without persistent storage for now)
     let client = Client::builder()
         .homeserver_url(&config.homeserver)
         .build()
@@ -202,6 +203,22 @@ async fn run_bot(config: BotConfig) -> Result<()> {
         }
     });
 
+    // Register event handler for encrypted room messages (for debugging)
+    let bot_username_encrypted = bot_username.clone();
+    client.add_event_handler(
+        move |event: OriginalSyncRoomEncryptedEvent, room: Room| {
+            let username = bot_username_encrypted.clone();
+            async move {
+                println!(
+                    "[{}] 🔐 Encrypted event received in room {} from {} (still encrypted - decryption may have failed)",
+                    username,
+                    room.room_id(),
+                    event.sender
+                );
+            }
+        },
+    );
+
     // Register event handler for room messages
     client.add_event_handler(
         move |event: OriginalSyncRoomMessageEvent, room: Room| {
@@ -227,12 +244,24 @@ async fn run_bot(config: BotConfig) -> Result<()> {
 
     println!("[{}] 👂 Listening for messages...", bot_username);
 
-    // Start syncing
+    // Start syncing - use sync_once in a loop for better control
     let settings = SyncSettings::default().timeout(Duration::from_secs(30));
 
     loop {
         match client.sync_once(settings.clone()).await {
-            Ok(_) => {}
+            Ok(response) => {
+                // Log if we received any room events
+                for (room_id, room_info) in &response.rooms.joined {
+                    if !room_info.timeline.events.is_empty() {
+                        println!(
+                            "[{}] 📬 Received {} timeline event(s) in room {}",
+                            bot_username,
+                            room_info.timeline.events.len(),
+                            room_id
+                        );
+                    }
+                }
+            }
             Err(e) => {
                 eprintln!("[{}] ❌ Sync error: {}", bot_username, e);
                 sleep(Duration::from_secs(5)).await;

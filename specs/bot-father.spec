@@ -34,6 +34,7 @@ Scenario: bots.json is empty
   Then do nothing.
 
 Scenario: bots.json is changed
-  Test: While botfather is running
-  Given bots.json, added a new bot:
-  Then botfather runs the new bot with the given access_token and username in the thread and apply crew's module logic of crew-api. 
+  Test: continuously edit botfather.rs and dm_cli_to_bot.rs, and run them. 
+  Given stdin dm_cli_to_bot.rs with "!crew hello".
+  Then the testuser2 bot in botfather should be able to call crew api and then send back response to testuser in               
+  dm_cli_to_bot.rs
