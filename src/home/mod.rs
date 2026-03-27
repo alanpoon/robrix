@@ -20,6 +20,7 @@ pub mod room_read_receipt;
 pub mod rooms_list;
 pub mod rooms_list_entry;
 pub mod rooms_list_header;
+pub mod rooms_list_header_dropdown;
 pub mod rooms_sidebar;
 pub mod search_messages;
 pub mod space_lobby;
@@ -45,6 +46,7 @@ pub fn script_mod(vm: &mut ScriptVm) {
     room_read_receipt::script_mod(vm);
     rooms_list_entry::script_mod(vm);
     rooms_list_header::script_mod(vm);
+    rooms_list_header_dropdown::script_mod(vm);
     rooms_list::script_mod(vm);
     edited_indicator::script_mod(vm);
     editing_pane::script_mod(vm);

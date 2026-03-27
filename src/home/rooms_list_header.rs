@@ -1,12 +1,13 @@
 //! The RoomsListHeader contains the title label and loading spinner for rooms list.
 //!
-//! This widget is designed to be reused across both Desktop and Mobile variants 
+//! This widget is designed to be reused across both Desktop and Mobile variants
 //! of the RoomsSideBar to avoid code duplication.
 
 use std::mem::discriminant;
 
 use makepad_widgets::*;
 use matrix_sdk_ui::sync_service::State;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     home::navigation_tab_bar::{NavigationBarAction, SelectedTab},
@@ -15,6 +16,25 @@ use crate::{
         popup_list::{PopupKind, enqueue_popup_notification},
     },
 };
+
+/// Filter options for the rooms list dropdown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum RoomFilterOption {
+    #[default]
+    All,
+    Unread,
+    Favorites,
+    People,
+}
+
+/// Sort options for the rooms list dropdown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum RoomSortOption {
+    #[default]
+    Activity,
+    Alphabetical,
+    Unread,
+}
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -88,6 +108,8 @@ pub struct RoomsListHeader {
     #[deref] view: View,
 
     #[rust(State::Idle)] sync_state: State,
+    #[rust(RoomFilterOption::All)] filter_option: RoomFilterOption,
+    #[rust(RoomSortOption::Activity)] sort_option: RoomSortOption,
 }
 
 impl Widget for RoomsListHeader {
@@ -124,6 +146,16 @@ impl Widget for RoomsListHeader {
                             cx.action(ImageViewerAction::Show(LoadState::Error(ImageViewerError::Offline)));
                         }
                         self.sync_state = new_state.clone();
+                        self.redraw(cx);
+                        continue;
+                    }
+                    Some(RoomsListHeaderAction::SetFilter(filter)) => {
+                        self.filter_option = *filter;
+                        self.redraw(cx);
+                        continue;
+                    }
+                    Some(RoomsListHeaderAction::SetSort(sort)) => {
+                        self.sort_option = *sort;
                         self.redraw(cx);
                         continue;
                     }
@@ -191,4 +223,14 @@ pub enum RoomsListHeaderAction {
     SetSyncStatus(bool),
     /// An action received by the RoomsListHeader indicating the sync service state has changed.
     StateUpdate(State),
+    /// An action emitted when the header is clicked to show the dropdown.
+    ShowDropdown {
+        pos: DVec2,
+        filter: RoomFilterOption,
+        sort: RoomSortOption,
+    },
+    /// An action to set the current filter option.
+    SetFilter(RoomFilterOption),
+    /// An action to set the current sort option.
+    SetSort(RoomSortOption),
 }
