@@ -226,3 +226,6 @@ Scenario: EnableEncryption is one-way — the UI cannot construct a disable upda
   flow beyond enabling encryption.
 - Per-user moderation badges, custom roles, or non-integer power levels.
 - Room export / import.
+
+## Forbidden
+- Do not use cargo fmt

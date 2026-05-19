@@ -232,3 +232,6 @@ Scenario: Filter preserves input order across multiple matches
   affordance is added here).
 - Display-name and avatar editing of *other* members.
 - Cross-room member search.
+
+## Forbidden
+- Do not use cargo fmt

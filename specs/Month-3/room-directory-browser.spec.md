@@ -247,3 +247,6 @@ Scenario: PublicRoomsAction exposes a Failed variant for surfacing search errors
   `MatrixRequest::GetRoomPreview` flow handles preview by alias).
 - Federated suggestions / recommendations / trending rooms.
 - Reporting / flagging a public room.
+
+## Forbidden
+- Do not use cargo fmt

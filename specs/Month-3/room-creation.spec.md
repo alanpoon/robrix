@@ -135,6 +135,7 @@ power-level defaulting are implemented as **pure functions** under
   must be returned from `parse_invitee_list` and rendered in the UI.
 - Do not add room-upgrade ("upgrade to v11"), room-tombstone, or
   cross-room linking flows here; those are explicit out-of-scope.
+- Do not use cargo fmt
 
 ## Completion Criteria
 

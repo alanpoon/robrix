@@ -46,16 +46,23 @@ spinning up Makepad's video session.
 - New widget `VideoMessagePlayerModal` at
   `src/shared/video_message_player_modal.rs`, registered in
   `src/shared/mod.rs` after `video_message_player.rs` (it imports the
-  shared state types and the `VideoMessagePlayerRef` from that module).
-  This widget owns the modal scrim, the centered card layout, the
-  modal-only controls, and the close button — but it does NOT own a
-  Makepad `Video` widget. It is pure modal chrome positioned around the
-  inline player's surface.
+  shared state types from that module). This widget owns the centered
+  card layout, the modal-only controls, and the close button — but it
+  does NOT own a Makepad `Video` widget, and it does NOT render the
+  scrim or its own overlay draw-list. Both of those are provided by
+  the outer Makepad `Modal { content +: { ... } }` that wraps this
+  widget (mirroring the `EventSourceModal` pattern at
+  `src/home/event_source_modal.rs` and its `Modal` wrapper at
+  `src/app.rs:124`).
 - Exactly one `VideoMessagePlayerModal` instance lives at the
-  `RoomScreen` level (not per-message). When a maximise is triggered,
-  the modal `bind`s to the originating `VideoMessagePlayer`'s shared
-  `Arc<Mutex<...>>` state handles, so a single modal slot serves every
-  video message in the room.
+  `RoomScreen` level (not per-message), placed inside an outer
+  `video_message_player_modal := Modal { content +: { ... } }` in the
+  `RoomScreen` live_design block. When a maximise is triggered, the
+  inline player emits `VideoMessagePlayerModalAction::Open { ... }`
+  carrying the shared state handles and the `VideoSummary`; `RoomScreen`
+  receives that action, calls `inner.show(...)` on the modal content
+  widget, and opens the outer `Modal`. A single modal slot serves
+  every video message in the room.
 - Exposes `VideoMessagePlayerRef`, `VideoMessagePlayerWidgetRefExt`,
   `VideoMessagePlayerModalRef`, and
   `VideoMessagePlayerModalWidgetRefExt`, following the existing widget
@@ -155,53 +162,69 @@ spinning up Makepad's video session.
 
 ### Maximise modal
 
-- `VideoMessagePlayerModal` is a standalone widget defined in
-  `src/shared/video_message_player_modal.rs`. It is instantiated exactly
-  once at the `RoomScreen` level (not per-message). When the inline
-  player's `maximise_button` is clicked, `RoomScreen` calls
-  `modal.bind(player_state, volume_state, ui_state, summary)` with the
-  originating player's shared state handles and then sets
-  `ui_state.lock().unwrap().maximised = true`.
-- The modal owns its own `DrawList2d` (the same overlay trick Makepad's
-  built-in `Modal` widget uses) so the scrim and chrome escape parent
-  bounds and are drawn above the rest of the room UI.
-- Modal layout, back-to-front, all rendered by
-  `VideoMessagePlayerModal` itself:
-  1. **Scrim** layer: a 50%-opacity black fill that covers the entire
-     viewport and absorbs pointer events behind the card.
-  2. **Card** layer: a centered container that defines the rect into
-     which the inline player's surface will be drawn. Sized to fill
-     90% of the viewport width *or* 90% of the viewport height —
-     whichever bound is reached first — while preserving the source's
-     aspect ratio. The modal does NOT itself contain a Makepad `Video`
-     widget; it writes the card's screen-space rect into
-     `ui_state.lock().unwrap().card_rect` on every draw, and the inline
-     `VideoMessagePlayer` reads that rect on its next draw to position
-     its single `Video` surface into the card area via the inline
-     player's own elevated `DrawList2d`.
-  3. **Controls** layer drawn on top of the card, mirroring the inline
-     control positions: centered Play / Pause, bottom slider strip with
-     elapsed / total `mm:ss` labels, and the same Mute button in the
-     card's top-right. Each control reads/writes the shared
-     `Arc<Mutex<...>>` state — never a copy.
-  4. **close_button** at the card's top-right corner showing
-     `resources/icons/close.svg`. The modal does NOT show a Maximise
-     button — its role is fulfilled by `close_button`.
-- Three input paths close the modal, and all of them flip
-  `ui_state.lock().unwrap().maximised = false` (via `toggle_maximise`)
-  so the modal-open state is owned in exactly one place:
-  1. Clicking `close_button`.
-  2. Clicking the `maximise_button` while the modal is open (the
-     button is still hit-testable through the inline overlay because
-     the inline view remains mounted under the scrim).
-  3. Clicking anywhere on the scrim outside the card.
-- The modal emits `VideoMessagePlayerModalAction::Dismissed` when any
-  of those three paths fire, so `RoomScreen` (or whoever holds the
-  modal handle) can flip `ui_state.maximised` and clear the bind. The
-  modal itself does NOT mutate `ui_state.maximised` so there is exactly
-  one writer of that field.
+`VideoMessagePlayerModal` follows the **same pattern as
+`EventSourceModal`** (see `src/home/event_source_modal.rs` and its
+outer-Modal wiring at `src/app.rs:124-131` / `src/app.rs:868-881`).
+The pattern in one line: an outer Makepad `Modal { content +: {
+inner := VideoMessagePlayerModal {} } }` provides the scrim, the
+overlay draw-list, and the scrim-click / Escape / back-press
+dismissal; the inner widget renders only the card body.
+
+- **Outer wrapper, owned by `RoomScreen`'s live_design block.** A
+  `video_message_player_modal := Modal { content +: {
+  video_message_player_modal_inner := VideoMessagePlayerModal {} } }`
+  block sits at the same level as the timeline. The outer `Modal`
+  (Makepad's built-in widget) is the one with the `DrawList2d` and
+  the scrim. The inner widget never draws a scrim itself.
+- **Inner widget body, rendered by `VideoMessagePlayerModal`.** No
+  scrim. No overlay draw-list. Just the card body:
+  1. **Card** layer: a centered, rounded view that defines the rect
+     into which the inline player's surface will be drawn. Sized to
+     fill 90% of the viewport width *or* 90% of the viewport height
+     — whichever bound is reached first — while preserving the
+     source's aspect ratio. The card itself does NOT contain a
+     Makepad `Video` widget; it writes the card's screen-space rect
+     into `ui_state.lock().unwrap().card_rect` on every draw, and
+     the inline `VideoMessagePlayer` reads that rect on its next
+     draw to position its single `Video` surface into the card area
+     via the inline player's own elevated `DrawList2d`.
+  2. **Controls** layer drawn on top of the card, mirroring the
+     inline control positions: centered Play / Pause, bottom slider
+     strip with elapsed / total `mm:ss` labels, and the same Mute
+     button in the card's top-right. Each control reads/writes the
+     shared `Arc<Mutex<...>>` state — never a copy.
+  3. **close_button** at the card's top-right corner showing
+     `resources/icons/close.svg`. The modal does NOT show a
+     Maximise button — its role is fulfilled by `close_button`.
+- **Action protocol** (mirrors `EventSourceModalAction`):
+  - `VideoMessagePlayerModalAction::Open { player_state,
+    volume_state, ui_state, summary }` — emitted by the inline
+    player's `maximise_button` handler. `RoomScreen` receives this
+    action, calls `inner.show(cx, player_state, volume_state,
+    ui_state, summary)`, then calls `outer.open(cx)`.
+  - `VideoMessagePlayerModalAction::Close` — emitted by the inner
+    widget when its `close_button` is clicked. `RoomScreen` receives
+    this action and calls `outer.close(cx)`.
+- **Dismissal paths and `ModalAction::Dismissed`.** When the user
+  dismisses the outer `Modal` via the scrim, the Escape key, or
+  back-press, the outer `Modal` self-closes and emits
+  `ModalAction::Dismissed`. The inner widget observes this in its
+  `WidgetMatchEvent::handle_actions` implementation and uses it to
+  flip `ui_state.lock().unwrap().maximised = false` so the inline
+  player exits its elevated-draw mode. The inner widget MUST NOT
+  re-emit `VideoMessagePlayerModalAction::Close` in response to
+  `ModalAction::Dismissed` (this would create an infinite action
+  feedback loop — see the comment at
+  `src/home/event_source_modal.rs:293-297`).
+- **`ui_state.maximised` is flipped in exactly two places** so the
+  invariant "one writer at a time" is preserved:
+  1. `RoomScreen` sets it to `true` when it handles
+     `VideoMessagePlayerModalAction::Open`.
+  2. The inner widget sets it to `false` when it observes either a
+     `close_button` click or a `ModalAction::Dismissed`.
 - Opening or closing the modal NEVER auto-pauses or auto-plays. The
-  shared `VideoPlayerState.playing` is unchanged across the transition.
+  shared `VideoPlayerState.playing` is unchanged across the
+  transition.
 
 ### Shared playback state
 
@@ -237,9 +260,10 @@ spinning up Makepad's video session.
   `pub type SharedPlayerState = Arc<Mutex<VideoPlayerState>>`,
   `pub type SharedVolumeState = Arc<Mutex<VideoVolumeState>>`, and
   `pub type SharedUiState = Arc<Mutex<VideoUiState>>`.
-  `VideoMessagePlayerModal::bind(...)` takes these three handles plus
-  the `VideoSummary` so the modal can render `total_ms` labels without
-  reaching back into the inline player.
+  `VideoMessagePlayerModal::show(...)` (the inner-widget entry point,
+  named to match the `EventSourceModal::show` convention) takes these
+  three handles plus the `VideoSummary` so the modal can render
+  `total_ms` labels without reaching back into the inline player.
 - Closing the modal NEVER resets `player_state.position_ms`,
   `player_state.playing`, `volume_state.muted`, or
   `volume_state.level`. The inline view resumes from wherever the
@@ -368,7 +392,7 @@ spinning up Makepad's video session.
 - Do not auto-pause audio when video plays, and do not auto-pause
   video when audio plays. The two media types have independent
   active-track slots.
-- use cargo fmt
+- Do not use cargo fmt
 
 ## Completion Criteria
 
