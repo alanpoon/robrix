@@ -2,6 +2,7 @@ use makepad_widgets::ScriptVm;
 
 pub mod add_room;
 pub mod create_bot_modal;
+pub mod create_room;
 pub mod delete_bot_modal;
 pub mod edited_indicator;
 pub mod editing_pane;
@@ -37,6 +38,7 @@ pub fn script_mod(vm: &mut ScriptVm) {
     loading_pane::script_mod(vm);
     location_preview::script_mod(vm);
     add_room::script_mod(vm);
+    create_room::script_mod(vm);
     create_bot_modal::script_mod(vm);
     delete_bot_modal::script_mod(vm);
     space_lobby::script_mod(vm);

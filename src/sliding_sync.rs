@@ -919,6 +919,13 @@ pub enum MatrixRequest {
         destination: Arc<Mutex<crate::home::link_preview::TimestampedCacheEntry>>,
         update_sender: Option<crossbeam_channel::Sender<TimelineUpdate>>,
     },
+    /// Request to create a new room. Submitted by `CreateRoomScreen`.
+    /// On success the handler also issues `invite_user_by_id` for each
+    /// entry in `config.initial_invitees` — per-invitee failures are
+    /// rolled up into `CreateRoomAction::PartialInvite`.
+    CreateRoom {
+        config: crate::home::create_room::CreateRoomConfig,
+    },
 }
 
 /// Submits a request to the worker thread to be executed asynchronously.
@@ -2286,6 +2293,42 @@ async fn matrix_worker_task(
 
                     on_fetched(url, destination, result, update_sender);
                     SignalToUI::set_ui_signal();
+                });
+            }
+
+            MatrixRequest::CreateRoom { config } => {
+                let Some(client) = get_client() else { continue };
+                let _create_room_task = Handle::current().spawn(async move {
+                    use crate::home::create_room::CreateRoomAction;
+                    let request = config.to_ruma_request();
+                    let invitees = config.initial_invitees.clone();
+                    match client.create_room(request).await {
+                        Ok(room) => {
+                            let room_id = room.room_id().to_owned();
+                            let mut failed = Vec::new();
+                            for invitee in invitees.iter() {
+                                if let Err(err) = room.invite_user_by_id(invitee).await {
+                                    error!(
+                                        "create_room: invite of {invitee} to {room_id} failed: {err:?}"
+                                    );
+                                    failed.push(invitee.clone());
+                                }
+                            }
+                            if failed.is_empty() {
+                                Cx::post_action(CreateRoomAction::Created { room_id });
+                            } else {
+                                Cx::post_action(CreateRoomAction::PartialInvite {
+                                    room_id,
+                                    failed,
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            Cx::post_action(CreateRoomAction::Failed {
+                                reason: error.to_string(),
+                            });
+                        }
+                    }
                 });
             }
         }

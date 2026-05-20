@@ -32,7 +32,7 @@ use crate::{
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        animated_image::{AnimatedImageRef, AnimatedImageWidgetRefExt}, audio_message_player::{AudioMessagePlayerRef, AudioMessagePlayerWidgetRefExt}, avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt
+        animated_image::{AnimatedImageRef, AnimatedImageWidgetRefExt}, audio_message_player::{AudioMessagePlayerRef, AudioMessagePlayerWidgetRefExt}, avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt, video_message_player::{VideoMessagePlayerRef, VideoMessagePlayerWidgetRefExt}, video_message_player_modal::{VideoMessagePlayerModalAction, VideoMessagePlayerModalWidgetExt}
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, MatrixRequest, PaginationDirection, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -341,6 +341,7 @@ script_mod! {
 
                 message := HtmlOrPlaintext { }
                 audio_player := AudioMessagePlayer { visible: false }
+                video_player := VideoMessagePlayer { visible: false }
                 link_preview_view := mod.widgets.LinkPreview {}
                 View {
                     width: Fill,
@@ -387,6 +388,7 @@ script_mod! {
 
                 message := HtmlOrPlaintext { }
                 audio_player := AudioMessagePlayer { visible: false }
+                video_player := VideoMessagePlayer { visible: false }
                 link_preview_view := mod.widgets.LinkPreview {}
                 View {
                     width: Fill,
@@ -855,6 +857,15 @@ script_mod! {
             create_bot_modal := Modal {
                 content +: {
                     create_bot_modal_inner := mod.widgets.CreateBotModal {}
+                }
+            }
+
+            video_message_player_modal := Modal {
+                content +: {
+                    height: Fill,
+                    width: Fill,
+                    align: Align{x: 0.5, y: 0.5},
+                    video_message_player_modal_inner := VideoMessagePlayerModal {}
                 }
             }
 
@@ -1428,6 +1439,36 @@ impl Widget for RoomScreen {
                             &request.display_name,
                             request.system_prompt.as_deref(),
                         );
+                        return false;
+                    }
+                    None => {}
+                }
+
+                match action.downcast_ref::<VideoMessagePlayerModalAction>() {
+                    Some(VideoMessagePlayerModalAction::Open {
+                        player_state,
+                        volume_state,
+                        ui_state,
+                        summary,
+                    }) => {
+                        self.view
+                            .video_message_player_modal(cx, ids!(video_message_player_modal_inner))
+                            .show(
+                                cx,
+                                player_state.clone(),
+                                volume_state.clone(),
+                                ui_state.clone(),
+                                summary.clone(),
+                            );
+                        self.view
+                            .modal(cx, ids!(video_message_player_modal))
+                            .open(cx);
+                        return false;
+                    }
+                    Some(VideoMessagePlayerModalAction::Close) => {
+                        self.view
+                            .modal(cx, ids!(video_message_player_modal))
+                            .close(cx);
                         return false;
                     }
                     None => {}
@@ -4015,10 +4056,16 @@ fn populate_message_view(
                     } else {
                         let html_or_plaintext_ref =
                             item.html_or_plaintext(cx, ids!(content.message));
+                        html_or_plaintext_ref.set_visible(cx, true);
+                        let video_player_ref =
+                            item.video_message_player(cx, ids!(content.video_player));
+                        video_player_ref.set_visible(cx, true);
                         new_drawn_status.content_drawn = populate_video_message_content(
                             cx,
                             &html_or_plaintext_ref,
+                            &video_player_ref,
                             video,
+                            media_cache,
                         );
                         (item, false)
                     }
@@ -4598,45 +4645,29 @@ fn populate_audio_message_content(
 }
 
 
-/// Draws a video message's content into the given `message_content_widget`.
+/// Draws a video message's content into the given `message_content_widget`
+/// and inline `video_player`.
 ///
 /// Returns whether the video message content was fully drawn.
 fn populate_video_message_content(
     cx: &mut Cx,
     message_content_widget: &HtmlOrPlaintextRef,
+    video_player: &VideoMessagePlayerRef,
     video: &VideoMessageEventContent,
+    media_cache: &mut MediaCache,
 ) -> bool {
-    // Display the file name, human-readable size, caption, and a button to download it.
-    let filename = htmlize::escape_text(video.filename());
-    let (duration, mime, size, dimensions) = video
+    let summary = crate::event_preview::summarize_video_message(video);
+    let poster_source = video
         .info
         .as_ref()
-        .map(|info| (
-            info.duration
-                .map(|d| format!("  {:.2} sec,", d.as_secs_f64()))
-                .unwrap_or_default(),
-            info.mimetype
-                .as_ref()
-                .map(|m| format!("  {m},"))
-                .unwrap_or_default(),
-            info.size
-                .map(|bytes| format!("  ({}),", ByteSize::b(bytes.into())))
-                .unwrap_or_default(),
-            info.width.and_then(|width|
-                info.height.map(|height| format!("  {width}x{height},"))
-            ).unwrap_or_default(),
-        ))
-        .unwrap_or_default();
-    let caption = video.formatted_caption()
-        .map(|fb| format!("<br><i>{}</i>", fb.body))
-        .or_else(|| video.caption().map(|c| format!("<br><i>{c}</i>")))
-        .unwrap_or_default();
-
-    // TODO: add an video to play the video file
-
-    message_content_widget.show_html(
+        .and_then(|info| info.thumbnail_source.clone());
+    message_content_widget.show_html(cx, crate::event_preview::video_summary_html(&summary));
+    video_player.populate_from_summary(
         cx,
-        format!("Video: <b>{filename}</b>{mime}{duration}{size}{dimensions}{caption}<br> → <i>Video playback not yet supported.</i>"),
+        summary,
+        video.source.clone(),
+        poster_source,
+        media_cache,
     );
     true
 }

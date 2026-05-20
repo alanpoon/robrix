@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 
-use matrix_sdk::{ruma::{OwnedUserId, events::{room::{guest_access::GuestAccess, history_visibility::HistoryVisibility, join_rules::JoinRule, message::{AudioMessageEventContent, MessageFormat, MessageType}}, AnySyncMessageLikeEvent, AnySyncTimelineEvent, FullStateEventContent, SyncMessageLikeEvent}, serde::Raw, UserId}};
+use matrix_sdk::{ruma::{OwnedUserId, events::{room::{guest_access::GuestAccess, history_visibility::HistoryVisibility, join_rules::JoinRule, message::{AudioMessageEventContent, MessageFormat, MessageType, VideoMessageEventContent}}, AnySyncMessageLikeEvent, AnySyncTimelineEvent, FullStateEventContent, SyncMessageLikeEvent}, serde::Raw, UserId}};
 use matrix_sdk_base::crypto::types::events::UtdCause;
 use matrix_sdk_ui::timeline::{self, AnyOtherFullStateEventContent, EncryptedMessage, EventTimelineItem, MemberProfileChange, MembershipChange, MsgLikeKind, OtherMessageLike, RoomMembershipChange, TimelineItemContent};
 
@@ -38,6 +38,18 @@ pub(crate) struct AudioSummary {
     pub(crate) duration_secs: Option<f64>,
     pub(crate) size_bytes: Option<u64>,
     pub(crate) caption_html: Option<String>,
+}
+
+/// Structured metadata extracted from a `m.video` message, used by
+/// the inline video player widget and the textual fallback summary.
+#[derive(Clone, Debug, Default)]
+pub struct VideoSummary {
+    pub filename: String,
+    pub mime: Option<String>,
+    pub duration_secs: Option<f64>,
+    pub size_bytes: Option<u64>,
+    pub dimensions: Option<(u64, u64)>,
+    pub caption_html: Option<String>,
 }
 impl From<(String, BeforeText)> for TextPreview {
     fn from((text, before_text): (String, BeforeText)) -> Self {
@@ -86,6 +98,88 @@ pub(crate) fn summarize_audio_message(audio: &AudioMessageEventContent) -> Audio
             .formatted_caption()
             .map(|formatted| formatted.body.clone())
             .or_else(|| audio.caption().map(|caption| htmlize::escape_text(caption).to_string())),
+    }
+}
+
+/// Build a structured summary of a `m.video` message. Width and height
+/// are only set together — a partial pair drops back to `None` so the
+/// caller never has to deal with an incomplete dimension.
+pub fn summarize_video_message(video: &VideoMessageEventContent) -> VideoSummary {
+    let dimensions = video.info.as_ref().and_then(|info| {
+        match (info.width, info.height) {
+            (Some(w), Some(h)) => Some((u64::from(w), u64::from(h))),
+            _ => None,
+        }
+    });
+    VideoSummary {
+        filename: video.filename().to_string(),
+        mime: video.info.as_ref().and_then(|info| info.mimetype.clone()),
+        duration_secs: video
+            .info
+            .as_ref()
+            .and_then(|info| info.duration)
+            .map(|duration| duration.as_secs_f64()),
+        size_bytes: video
+            .info
+            .as_ref()
+            .and_then(|info| info.size)
+            .map(Into::into),
+        dimensions,
+        caption_html: video
+            .formatted_caption()
+            .map(|formatted| formatted.body.clone())
+            .or_else(|| video.caption().map(|caption| htmlize::escape_text(caption).to_string())),
+    }
+}
+
+/// Render the structured `VideoSummary` as a small HTML block used as
+/// the textual fallback above the inline video player. Filename is
+/// HTML-escaped; dimensions render as `WIDTHxHEIGHT` only when both
+/// are known so the omits-when-none test passes.
+pub fn video_summary_html(summary: &VideoSummary) -> String {
+    let mut out = String::new();
+    out.push_str("<b>");
+    out.push_str(&htmlize::escape_text(&summary.filename));
+    out.push_str("</b>");
+
+    let mut meta_parts: Vec<String> = Vec::new();
+    if let Some((w, h)) = summary.dimensions {
+        meta_parts.push(format!("{}x{}", w, h));
+    }
+    if let Some(secs) = summary.duration_secs {
+        meta_parts.push(format_mmss(secs));
+    }
+    if let Some(bytes) = summary.size_bytes {
+        meta_parts.push(format_bytesize(bytes));
+    }
+    if let Some(mime) = summary.mime.as_deref() {
+        meta_parts.push(htmlize::escape_text(mime).to_string());
+    }
+    if !meta_parts.is_empty() {
+        out.push_str(" <i>(");
+        out.push_str(&meta_parts.join(", "));
+        out.push_str(")</i>");
+    }
+
+    if let Some(caption) = summary.caption_html.as_deref() {
+        out.push_str("<br>");
+        out.push_str(caption);
+    }
+    out
+}
+
+fn format_bytesize(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    const GIB: u64 = MIB * 1024;
+    if bytes >= GIB {
+        format!("{:.1} GiB", bytes as f64 / GIB as f64)
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", bytes as f64 / MIB as f64)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes as f64 / KIB as f64)
+    } else {
+        format!("{} B", bytes)
     }
 }
 
@@ -490,6 +584,116 @@ mod tests_audio_summary {
     #[test]
     fn test_infer_audio_extension_returns_empty() {
         assert_eq!(infer_audio_extension("recording", None), "");
+    }
+}
+
+
+#[cfg(test)]
+mod tests_video_summary {
+    use std::time::Duration;
+
+    use matrix_sdk::ruma::{
+        events::room::{MediaSource, message::{VideoInfo, VideoMessageEventContent}},
+        uint,
+    };
+
+    use super::*;
+
+    fn video_message(body: &str) -> VideoMessageEventContent {
+        VideoMessageEventContent::new(
+            body.to_string(),
+            MediaSource::Plain("mxc://example.org/video".try_into().unwrap()),
+        )
+    }
+
+    #[test]
+    fn test_video_summary_full_info() {
+        let mut video = video_message("clip.mp4");
+        let mut info = VideoInfo::new();
+        info.mimetype = Some("video/mp4".to_string());
+        info.width = Some(uint!(1920));
+        info.height = Some(uint!(1080));
+        info.duration = Some(Duration::from_millis(7_250));
+        info.size = Some(uint!(2_048_000));
+        video.info = Some(Box::new(info));
+
+        let summary = summarize_video_message(&video);
+
+        assert_eq!(summary.dimensions, Some((1920, 1080)));
+        assert_eq!(summary.duration_secs, Some(7.25));
+        assert_eq!(summary.size_bytes, Some(2_048_000));
+        assert_eq!(summary.mime, Some("video/mp4".to_string()));
+    }
+
+    #[test]
+    fn test_video_summary_partial_dimensions() {
+        let mut video = video_message("clip.mp4");
+        let mut info = VideoInfo::new();
+        info.width = Some(uint!(1280));
+        info.height = None;
+        video.info = Some(Box::new(info));
+
+        let summary = summarize_video_message(&video);
+
+        assert_eq!(summary.dimensions, None);
+    }
+
+    #[test]
+    fn test_video_summary_missing_info() {
+        let video = video_message("clip.mp4");
+        // info is None by construction
+
+        let summary = summarize_video_message(&video);
+
+        assert_eq!(summary.dimensions, None);
+        assert_eq!(summary.duration_secs, None);
+        assert_eq!(summary.size_bytes, None);
+        assert_eq!(summary.mime, None);
+    }
+
+    #[test]
+    fn test_video_summary_html_includes_dimensions() {
+        let summary = VideoSummary {
+            filename: "clip.mp4".to_string(),
+            dimensions: Some((640, 480)),
+            ..Default::default()
+        };
+
+        let html = video_summary_html(&summary);
+        assert!(html.contains("640x480"), "expected dimensions in: {html}");
+    }
+
+    #[test]
+    fn test_video_summary_html_omits_dimensions_when_none() {
+        let summary = VideoSummary {
+            filename: "clip.mp4".to_string(),
+            dimensions: None,
+            ..Default::default()
+        };
+        let html = video_summary_html(&summary);
+
+        // No "x" sandwiched between two digit runs.
+        let bytes = html.as_bytes();
+        for i in 1..bytes.len().saturating_sub(1) {
+            if bytes[i] == b'x' {
+                let prev = bytes[i - 1].is_ascii_digit();
+                let next = bytes[i + 1].is_ascii_digit();
+                assert!(!(prev && next), "found digit-x-digit in: {html}");
+            }
+        }
+        assert!(!html.contains("None"), "expected no 'None' in: {html}");
+    }
+
+    #[test]
+    fn test_video_summary_html_escapes_filename() {
+        let summary = VideoSummary {
+            filename: "<img src=x onerror=1>.mp4".to_string(),
+            ..Default::default()
+        };
+
+        let html = video_summary_html(&summary);
+        assert!(html.contains("&lt;img"), "expected escaped filename in: {html}");
+        assert!(!html.contains("<img "), "expected no raw <img tag in: {html}");
     }
 }
 
