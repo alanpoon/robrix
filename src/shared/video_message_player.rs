@@ -9,7 +9,8 @@
 //! `tests_video_message_player` module at the bottom of this file.
 
 use std::{
-    rc::Rc,
+    path::PathBuf,
+    sync::mpsc::Receiver,
     sync::{Arc, Mutex},
 };
 
@@ -22,6 +23,10 @@ pub use crate::shared::audio_message_player::DragPhase;
 use crate::{
     event_preview::format_mmss,
     media_cache::{MediaCache, MediaCacheEntry},
+    shared::robrix_video::{
+        cap_blurhash_dimensions, decode_blurhash_to_rgba, placeholder_fallback_color,
+        RobrixVideoRef, RobrixVideoWidgetExt,
+    },
     shared::video_message_player_modal::VideoMessagePlayerModalAction,
     utils,
 };
@@ -83,7 +88,12 @@ pub enum VideoPlaybackAction {
     /// Broadcast whenever a new video begins playback. Other video
     /// players observe this and pause themselves if their uid does not
     /// match — same "single-active track" model the audio player uses.
-    ActiveTrackChanged { now_playing: WidgetUid },
+    ActiveTrackChanged {
+        now_playing: WidgetUid,
+    },
+    ResumeInlineAfterModal {
+        inline_uid: WidgetUid,
+    },
 }
 
 // ============================================================================
@@ -112,6 +122,43 @@ pub fn should_show_unplayable_overlay(summary: &VideoSummary) -> bool {
     match summary.mime.as_deref() {
         Some(mime) => !is_playable_mime(mime),
         None => false,
+    }
+}
+
+pub fn infer_video_extension(filename: &str, mime: Option<&str>) -> &'static str {
+    let from_filename = filename
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.trim().to_ascii_lowercase())
+        .and_then(|ext| match ext.as_str() {
+            "mp4" | "m4v" | "mov" | "webm" | "ogv" | "ogg" => Some(ext),
+            _ => None,
+        });
+
+    match from_filename.as_deref() {
+        Some("mp4") => "mp4",
+        Some("m4v") => "m4v",
+        Some("mov") => "mov",
+        Some("webm") => "webm",
+        Some("ogv") => "ogv",
+        Some("ogg") => "ogg",
+        _ => mime.and_then(video_extension_from_mime).unwrap_or("mp4"),
+    }
+}
+
+fn video_extension_from_mime(mime: &str) -> Option<&'static str> {
+    match mime
+        .to_ascii_lowercase()
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+    {
+        "video/mp4" => Some("mp4"),
+        "video/x-m4v" => Some("m4v"),
+        "video/quicktime" => Some("mov"),
+        "video/webm" => Some("webm"),
+        "video/ogg" => Some("ogv"),
+        _ => None,
     }
 }
 
@@ -181,6 +228,64 @@ fn set_active_video(uid: WidgetUid) {
     }
 }
 
+#[cfg(test)]
+#[derive(Debug, PartialEq)]
+enum PosterLayerDecision {
+    SetPosterTexture,
+    DecodeBlurhash { width: u32, height: u32 },
+    SetSolidFallback([u8; 4]),
+}
+
+#[cfg(test)]
+fn poster_layer_decision(
+    entry: &MediaCacheEntry,
+    blurhash: Option<&str>,
+    dimensions: Option<(u32, u32)>,
+) -> PosterLayerDecision {
+    if matches!(entry, MediaCacheEntry::Loaded(_)) {
+        return PosterLayerDecision::SetPosterTexture;
+    }
+
+    if let (Some(blurhash), Some((width, height))) = (blurhash, dimensions) {
+        let (width, height) = cap_blurhash_dimensions(
+            width,
+            height,
+            crate::home::room_screen::BLURHASH_IMAGE_MAX_SIZE,
+        );
+        if decode_blurhash_to_rgba(blurhash, width, height).is_some() {
+            return PosterLayerDecision::DecodeBlurhash { width, height };
+        }
+    }
+
+    PosterLayerDecision::SetSolidFallback(placeholder_fallback_color())
+}
+
+#[cfg(test)]
+#[derive(Debug, PartialEq)]
+enum VideoFileLayerDecision {
+    SetSourceUrl(PathBuf),
+    DisablePlay,
+    SetInlineError(String),
+}
+
+#[cfg(test)]
+fn video_file_layer_decision(
+    entry: &MediaCacheEntry,
+    format: &MediaFormat,
+    mxc_uri: &OwnedMxcUri,
+    source_path: PathBuf,
+) -> VideoFileLayerDecision {
+    match (entry, format) {
+        (MediaCacheEntry::Loaded(_), MediaFormat::File) => {
+            VideoFileLayerDecision::SetSourceUrl(source_path)
+        }
+        (MediaCacheEntry::Failed(status_code), _) => VideoFileLayerDecision::SetInlineError(
+            format!("Failed to fetch video from {mxc_uri} (HTTP {status_code})"),
+        ),
+        _ => VideoFileLayerDecision::DisablePlay,
+    }
+}
+
 // ============================================================================
 // Live design
 // ============================================================================
@@ -214,19 +319,9 @@ script_mod! {
                 border_radius: 8.0
             }
 
-            poster_image := Image {
+            robrix_video := RobrixVideo {
                 width: Fill
                 height: Fill
-                fit: ImageFit.Smallest
-            }
-
-            video_surface := Video {
-                width: Fill
-                height: Fill
-                show_controls: false
-                show_idle_thumbnail: true
-                autoplay: false
-                is_looping: false
             }
 
             unplayable_overlay := View {
@@ -274,7 +369,7 @@ script_mod! {
                 mute_button := Button {
                     width: 36
                     height: 36
-                    margin: Inset{left: 99999}     // top-right
+                    margin: Inset{left: 99999}      // push to top-right edge
                     text: ""
                     spacing: 0
                     padding: 0
@@ -397,26 +492,56 @@ script_mod! {
 
 #[derive(Script, Widget, ScriptHook)]
 pub struct VideoMessagePlayer {
-    #[deref] view: View,
+    #[deref]
+    view: View,
 
     // Per-message metadata.
-    #[rust] summary: Option<VideoSummary>,
-    #[rust] video_source: Option<MediaSource>,
-    #[rust] poster_source: Option<MediaSource>,
-    #[rust] loaded_video: Option<OwnedMxcUri>,
+    #[rust]
+    summary: Option<VideoSummary>,
+    #[rust]
+    video_source: Option<MediaSource>,
+    #[rust]
+    poster_source: Option<MediaSource>,
+    #[rust]
+    loaded_video: Option<OwnedMxcUri>,
+    #[rust]
+    loaded_source_url: Option<PathBuf>,
+    #[rust]
+    loaded_poster: Option<OwnedMxcUri>,
+    #[rust]
+    poster_texture: Option<Texture>,
+    #[rust]
+    blurhash: Option<String>,
+    #[rust]
+    blurhash_dimensions: Option<(u32, u32)>,
+    #[rust]
+    blurhash_decode_key: Option<(String, u32, u32)>,
+    #[rust]
+    blurhash_texture_key: Option<(String, u32, u32)>,
+    #[rust]
+    blurhash_receiver: Option<Receiver<Option<(u32, u32, Vec<u8>)>>>,
+    #[rust]
+    play_enabled: bool,
 
     // Shared state — these Arcs are cloned and handed to the modal on
     // maximise so both views observe the same playback / volume / ui
     // state through `Arc<Mutex<...>>`.
-    #[rust] player_state: SharedPlayerState,
-    #[rust] volume_state: SharedVolumeState,
-    #[rust] ui_state: SharedUiState,
+    #[rust]
+    player_state: SharedPlayerState,
+    #[rust]
+    volume_state: SharedVolumeState,
+    #[rust]
+    ui_state: SharedUiState,
 
-    #[rust] slider_drag_was_playing: Option<bool>,
+    #[rust]
+    slider_drag_was_playing: Option<bool>,
 }
 
 impl Widget for VideoMessagePlayer {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        if matches!(event, Event::Signal) {
+            self.poll_blurhash_receiver(cx);
+        }
         if let Event::Actions(actions) = event {
             for action in actions {
                 if let Some(VideoPlaybackAction::ActiveTrackChanged { now_playing }) =
@@ -424,6 +549,13 @@ impl Widget for VideoMessagePlayer {
                 {
                     if *now_playing != self.widget_uid() {
                         self.pause_for_other_video(cx);
+                    }
+                }
+                if let Some(VideoPlaybackAction::ResumeInlineAfterModal { inline_uid }) =
+                    action.downcast_ref::<VideoPlaybackAction>()
+                {
+                    if *inline_uid == self.widget_uid() {
+                        self.begin_inline_after_modal(cx);
                     }
                 }
             }
@@ -511,19 +643,47 @@ impl VideoMessagePlayer {
         video_source: MediaSource,
         poster_source: Option<MediaSource>,
         media_cache: &mut MediaCache,
-    ) {
+    ) -> bool {
+        self.populate_from_summary_and_blurhash(
+            cx,
+            summary,
+            video_source,
+            poster_source,
+            None,
+            None,
+            media_cache,
+        )
+    }
+
+    pub fn populate_from_summary_and_blurhash(
+        &mut self,
+        cx: &mut Cx,
+        summary: VideoSummary,
+        video_source: MediaSource,
+        poster_source: Option<MediaSource>,
+        blurhash: Option<String>,
+        blurhash_dimensions: Option<(u32, u32)>,
+        media_cache: &mut MediaCache,
+    ) -> bool {
         self.summary = Some(summary);
         self.video_source = Some(video_source);
         self.poster_source = poster_source.or_else(|| self.video_source.clone());
         self.loaded_video = None;
+        self.blurhash = blurhash;
+        self.blurhash_dimensions = blurhash_dimensions;
         self.slider_drag_was_playing = None;
 
         self.apply_summary_state(cx);
-        self.populate_poster(cx, media_cache);
-        if !self.is_unplayable() {
-            self.ensure_video_loaded(cx, media_cache);
+        let poster_drawn = self.populate_poster(cx, media_cache);
+        let video_drawn = self.is_unplayable() || self.ensure_video_loaded(cx, media_cache);
+        if poster_drawn && !video_drawn {
+            if let Some(texture) = self.poster_texture.clone() {
+                self.robrix_video_ref(cx).set_poster_texture(cx, texture);
+            }
         }
         self.sync_controls(cx);
+        println!("poster_drawn {:?} video_drawn {:?}", poster_drawn, video_drawn);
+        poster_drawn && video_drawn
     }
 
     fn apply_summary_state(&mut self, cx: &mut Cx) {
@@ -549,15 +709,38 @@ impl VideoMessagePlayer {
         self.view(cx, ids!(error_label)).set_visible(cx, false);
     }
 
-    fn populate_poster(&mut self, cx: &mut Cx, media_cache: &mut MediaCache) {
+    fn populate_poster(&mut self, cx: &mut Cx, media_cache: &mut MediaCache) -> bool {
         let Some(MediaSource::Plain(mxc_uri)) = self.poster_source.clone() else {
-            return;
+            self.apply_blurhash_or_fallback(cx);
+            return true;
         };
-        if let (MediaCacheEntry::Loaded(data), MediaFormat::Thumbnail(_)) =
-            media_cache.try_get_media_or_fetch(&mxc_uri, utils::MEDIA_THUMBNAIL_FORMAT.into())
-        {
-            let image = self.view.image(cx, ids!(surface.poster_image));
-            let _ = utils::load_png_or_jpg(&image, cx, &data);
+        if self.loaded_poster.as_ref() == Some(&mxc_uri) {
+            return true;
+        }
+        match media_cache.try_get_media_or_fetch(&mxc_uri, utils::MEDIA_THUMBNAIL_FORMAT.into()) {
+            (MediaCacheEntry::Loaded(data), _) => {
+                match crate::shared::image_viewer::get_png_or_jpg_image_buffer(data.to_vec()) {
+                    Ok(image_buffer) => {
+                        let texture = image_buffer.into_new_texture(cx);
+                        self.robrix_video_ref(cx).set_poster_texture(cx, texture.clone());
+                        self.poster_texture = Some(texture);
+                        self.loaded_poster = Some(mxc_uri);
+                        true
+                    }
+                    Err(_) => {
+                        self.apply_blurhash_or_fallback(cx);
+                        true
+                    }
+                }
+            }
+            (MediaCacheEntry::Requested, _) => {
+                self.apply_blurhash_or_fallback(cx);
+                false
+            }
+            (MediaCacheEntry::Failed(_), _) => {
+                self.apply_blurhash_or_fallback(cx);
+                true
+            }
         }
     }
 
@@ -571,17 +754,38 @@ impl VideoMessagePlayer {
         }
         match media_cache.try_get_media_or_fetch(&mxc_uri, MediaFormat::File) {
             (MediaCacheEntry::Loaded(data), MediaFormat::File) => {
-                self.view
-                    .video(cx, ids!(surface.video_surface))
-                    .set_source_in_memory(Rc::new(data.to_vec()));
+                let mut path = media_cache.path_for(&mxc_uri);
+                if path.extension().is_none() {
+                    if let Some(summary) = self.summary.as_ref() {
+                        path.set_extension(infer_video_extension(
+                            &summary.filename,
+                            summary.mime.as_deref(),
+                        ));
+                    }
+                }
+                if let Err(error) = std::fs::write(&path, &data) {
+                    self.show_error(cx, &format!("Failed to stage video file: {error}"));
+                    self.set_play_enabled(cx, false);
+                    return false;
+                }
+                self.robrix_video_ref(cx).set_source_url(cx, path.clone());
+                self.loaded_source_url = Some(path);
                 self.loaded_video = Some(mxc_uri);
+                self.set_play_enabled(cx, true);
                 self.view(cx, ids!(error_label)).set_visible(cx, false);
                 true
             }
-            (MediaCacheEntry::Requested, _) | (MediaCacheEntry::Loaded(_), _) => false,
-            (MediaCacheEntry::Failed(_), _) => {
-                self.show_error(cx, "Failed to fetch video.");
+            (MediaCacheEntry::Requested, _) | (MediaCacheEntry::Loaded(_), _) => {
+                self.set_play_enabled(cx, false);
                 false
+            }
+            (MediaCacheEntry::Failed(status_code), _) => {
+                self.set_play_enabled(cx, false);
+                self.show_error(
+                    cx,
+                    &format!("Failed to fetch video from {mxc_uri} (HTTP {status_code})"),
+                );
+                true
             }
         }
     }
@@ -590,24 +794,20 @@ impl VideoMessagePlayer {
         if self.is_unplayable() {
             return;
         }
-        let video = self.view.video(cx, ids!(surface.video_surface));
+        let video = self.robrix_video_ref(cx);
         let was_playing = self
             .player_state
             .lock()
             .ok()
             .map(|g| g.playing)
             .unwrap_or(false);
-        if was_playing || video.is_playing() {
+        if was_playing || video.is_playing(cx) {
             video.pause_playback(cx);
             if let Ok(mut s) = self.player_state.lock() {
                 s.playing = false;
             }
         } else {
-            if video.is_paused() {
-                video.resume_playback(cx);
-            } else {
-                video.begin_playback(cx);
-            }
+            video.begin_playback(cx);
             if let Ok(mut s) = self.player_state.lock() {
                 s.playing = true;
             }
@@ -624,9 +824,7 @@ impl VideoMessagePlayer {
             .map(|g| g.playing)
             .unwrap_or(false);
         if was_playing {
-            self.view
-                .video(cx, ids!(surface.video_surface))
-                .pause_playback(cx);
+            self.robrix_video_ref(cx).pause_playback(cx);
         }
         if let Ok(mut s) = self.player_state.lock() {
             s.playing = false;
@@ -646,11 +844,11 @@ impl VideoMessagePlayer {
         } else {
             false
         };
-        let video = self.view.video(cx, ids!(surface.video_surface));
+        let _ = new_muted;
         if new_muted {
-            video.mute_playback(cx);
+            self.robrix_video_ref(cx).mute_playback(cx);
         } else {
-            video.unmute_playback(cx);
+            self.robrix_video_ref(cx).unmute_playback(cx);
         }
         self.sync_controls(cx);
     }
@@ -659,20 +857,32 @@ impl VideoMessagePlayer {
         let Some(summary) = self.summary.clone() else {
             return;
         };
+        let Some(source_url) = self.loaded_source_url.clone() else {
+            return;
+        };
+        let position_ms = self.robrix_video_ref(cx).current_position_ms();
+        self.robrix_video_ref(cx).stop_and_cleanup_resources(cx);
+        if let Ok(mut state) = self.player_state.lock() {
+            state.playing = false;
+        }
+        self.sync_controls(cx);
         if let Ok(mut ui) = self.ui_state.lock() {
             ui.maximised = true;
         }
         cx.action(VideoMessagePlayerModalAction::Open {
-            player_state: Arc::clone(&self.player_state),
-            volume_state: Arc::clone(&self.volume_state),
-            ui_state: Arc::clone(&self.ui_state),
+            inline_uid: self.widget_uid(),
+            source_url,
+            blurhash: self.blurhash.clone(),
             summary,
+            position_ms,
         });
     }
 
     fn show_error(&mut self, cx: &mut Cx, text: &str) {
         self.view.label(cx, ids!(error_label)).set_text(cx, text);
         self.view(cx, ids!(error_label)).set_visible(cx, true);
+        self.view(cx, ids!(surface.controls.slider_row))
+            .set_visible(cx, false);
     }
 
     fn is_unplayable(&self) -> bool {
@@ -727,6 +937,89 @@ impl VideoMessagePlayer {
             .label(cx, ids!(surface.controls.slider_row.elapsed_label))
             .set_text(cx, &format_mmss(position_ms as f64 / 1000.0));
     }
+
+    fn set_play_enabled(&mut self, cx: &mut Cx, enabled: bool) {
+        self.play_enabled = enabled;
+        self.view
+            .button(cx, ids!(surface.controls.center_controls.play_button))
+            .set_enabled(cx, enabled);
+        self.view
+            .button(cx, ids!(surface.controls.center_controls.pause_button))
+            .set_enabled(cx, enabled);
+    }
+
+    fn apply_blurhash_or_fallback(&mut self, cx: &mut Cx) {
+        if let (Some(blurhash), Some((width, height))) =
+            (self.blurhash.as_deref(), self.blurhash_dimensions)
+        {
+            let (width, height) = cap_blurhash_dimensions(
+                width,
+                height,
+                crate::home::room_screen::BLURHASH_IMAGE_MAX_SIZE,
+            );
+            let key = (blurhash.to_string(), width, height);
+            if self.blurhash_texture_key.as_ref() == Some(&key)
+                || self.blurhash_decode_key.as_ref() == Some(&key)
+            {
+                return;
+            }
+            self.blurhash_decode_key = Some(key);
+            let blurhash = blurhash.to_string();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            self.blurhash_receiver = Some(receiver);
+            cx.spawn_thread(move || {
+                let result = decode_blurhash_to_rgba(&blurhash, width, height)
+                    .map(|data| (width, height, data));
+                let _ = sender.send(result);
+                SignalToUI::set_ui_signal();
+            });
+            return;
+        }
+        self.robrix_video_ref(cx)
+            .set_poster_to_solid_color(cx, placeholder_fallback_color());
+    }
+
+    fn poll_blurhash_receiver(&mut self, cx: &mut Cx) {
+        let Some(receiver) = self.blurhash_receiver.as_ref() else {
+            return;
+        };
+        let Ok(result) = receiver.try_recv() else {
+            return;
+        };
+        self.blurhash_receiver = None;
+        match result {
+            Some((width, height, data)) => {
+                if let Ok(buffer) = ImageBuffer::new(&data, width as usize, height as usize) {
+                    let texture = buffer.into_new_texture(cx);
+                    self.robrix_video_ref(cx).set_blurhash_texture(cx, texture);
+                    self.blurhash_texture_key = self.blurhash_decode_key.take();
+                }
+            }
+            None => {
+                self.blurhash_decode_key = None;
+                self.robrix_video_ref(cx)
+                    .set_poster_to_solid_color(cx, placeholder_fallback_color());
+            }
+        }
+    }
+
+    pub fn robrix_video_ref(&self, cx: &mut Cx) -> RobrixVideoRef {
+        self.view.robrix_video(cx, ids!(surface.robrix_video))
+    }
+
+    pub fn loaded_source_url(&self) -> Option<PathBuf> {
+        self.loaded_source_url.clone()
+    }
+
+    fn begin_inline_after_modal(&mut self, cx: &mut Cx) {
+        self.robrix_video_ref(cx).begin_playback(cx);
+        if let Ok(mut state) = self.player_state.lock() {
+            state.playing = true;
+            state.position_ms = 0;
+        }
+        self.sync_controls(cx);
+        set_active_video(self.widget_uid());
+    }
 }
 
 // ============================================================================
@@ -741,11 +1034,42 @@ impl VideoMessagePlayerRef {
         video_source: MediaSource,
         poster_source: Option<MediaSource>,
         media_cache: &mut MediaCache,
-    ) {
-        if let Some(mut inner) = self.borrow_mut() {
-            inner.populate_from_summary(cx, summary, video_source, poster_source, media_cache);
-        }
+    ) -> bool {
+        self.borrow_mut().is_some_and(|mut inner| {
+            inner.populate_from_summary(cx, summary, video_source, poster_source, media_cache)
+        })
     }
+
+    pub fn populate_from_summary_and_blurhash(
+        &self,
+        cx: &mut Cx,
+        summary: VideoSummary,
+        video_source: MediaSource,
+        poster_source: Option<MediaSource>,
+        blurhash: Option<String>,
+        blurhash_dimensions: Option<(u32, u32)>,
+        media_cache: &mut MediaCache,
+    ) -> bool {
+        self.borrow_mut().is_some_and(|mut inner| {
+            inner.populate_from_summary_and_blurhash(
+                cx,
+                summary,
+                video_source,
+                poster_source,
+                blurhash,
+                blurhash_dimensions,
+                media_cache,
+            )
+        })
+    }
+
+    pub fn robrix_video(&self, cx: &mut Cx) -> RobrixVideoRef {
+        self.borrow()
+            .map(|inner| inner.robrix_video_ref(cx))
+            .unwrap_or_default()
+    }
+
+    pub fn set_play_button_text(&self, _cx: &mut Cx, _text: &str) {}
 }
 
 // ============================================================================
@@ -755,6 +1079,7 @@ impl VideoMessagePlayerRef {
 #[cfg(test)]
 mod tests_video_message_player {
     use super::*;
+    use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
     fn summary_with_mime(mime: Option<&str>) -> VideoSummary {
@@ -796,6 +1121,26 @@ mod tests_video_message_player {
         assert!(!is_playable_mime(""));
     }
 
+    #[test]
+    fn test_infer_video_extension_prefers_filename() {
+        assert_eq!(
+            infer_video_extension("clip.mov", Some("video/mp4")),
+            "mov"
+        );
+    }
+
+    #[test]
+    fn test_infer_video_extension_falls_back_to_mime() {
+        assert_eq!(infer_video_extension("clip", Some("video/mp4")), "mp4");
+        assert_eq!(infer_video_extension("clip", Some("video/quicktime")), "mov");
+        assert_eq!(infer_video_extension("clip", Some("video/webm")), "webm");
+    }
+
+    #[test]
+    fn test_infer_video_extension_defaults_to_mp4() {
+        assert_eq!(infer_video_extension("clip", None), "mp4");
+    }
+
     // ---- should_show_unplayable_overlay ----
 
     #[test]
@@ -815,6 +1160,115 @@ mod tests_video_message_player {
     #[test]
     fn test_should_show_unplayable_overlay_false_when_mime_none() {
         assert!(!should_show_unplayable_overlay(&summary_with_mime(None)));
+    }
+
+    // ---- poster / file cache layer decisions ----
+
+    fn test_mxc_uri() -> OwnedMxcUri {
+        "mxc://example.org/video".try_into().unwrap()
+    }
+
+    #[test]
+    fn test_requested_poster_with_blurhash_decodes() {
+        assert_eq!(
+            poster_layer_decision(
+                &MediaCacheEntry::Requested,
+                Some("LEHV6nWB2yk8pyo0adR*.7kCMdnj"),
+                Some((640, 480)),
+            ),
+            PosterLayerDecision::DecodeBlurhash {
+                width: 500,
+                height: 375,
+            }
+        );
+    }
+
+    #[test]
+    fn test_requested_poster_without_blurhash_falls_back_to_solid() {
+        assert_eq!(
+            poster_layer_decision(&MediaCacheEntry::Requested, None, Some((640, 480))),
+            PosterLayerDecision::SetSolidFallback([0x22, 0x22, 0x22, 0xFF])
+        );
+    }
+
+    #[test]
+    fn test_requested_poster_missing_width_skips_decode() {
+        assert_eq!(
+            poster_layer_decision(
+                &MediaCacheEntry::Requested,
+                Some("LEHV6nWB2yk8pyo0adR*.7kCMdnj"),
+                None,
+            ),
+            PosterLayerDecision::SetSolidFallback([0x22, 0x22, 0x22, 0xFF])
+        );
+    }
+
+    #[test]
+    fn test_loaded_poster_sets_poster_texture() {
+        assert_eq!(
+            poster_layer_decision(&MediaCacheEntry::Loaded(Arc::from([0_u8; 4])), None, None),
+            PosterLayerDecision::SetPosterTexture
+        );
+    }
+
+    #[test]
+    fn test_failed_poster_falls_back_to_blurhash() {
+        assert_eq!(
+            poster_layer_decision(
+                &MediaCacheEntry::Failed(reqwest::StatusCode::NOT_FOUND),
+                Some("LEHV6nWB2yk8pyo0adR*.7kCMdnj"),
+                Some((640, 480)),
+            ),
+            PosterLayerDecision::DecodeBlurhash {
+                width: 500,
+                height: 375,
+            }
+        );
+    }
+
+    #[test]
+    fn test_requested_video_file_disables_play() {
+        let mxc_uri = test_mxc_uri();
+        assert_eq!(
+            video_file_layer_decision(
+                &MediaCacheEntry::Requested,
+                &MediaFormat::File,
+                &mxc_uri,
+                PathBuf::from("/tmp/clip.mp4"),
+            ),
+            VideoFileLayerDecision::DisablePlay
+        );
+    }
+
+    #[test]
+    fn test_loaded_video_file_enables_play() {
+        let mxc_uri = test_mxc_uri();
+        assert_eq!(
+            video_file_layer_decision(
+                &MediaCacheEntry::Loaded(Arc::from([0_u8; 4])),
+                &MediaFormat::File,
+                &mxc_uri,
+                PathBuf::from("/tmp/clip.mp4"),
+            ),
+            VideoFileLayerDecision::SetSourceUrl(PathBuf::from("/tmp/clip.mp4"))
+        );
+    }
+
+    #[test]
+    fn test_failed_video_file_shows_inline_error() {
+        let mxc_uri = test_mxc_uri();
+        assert_eq!(
+            video_file_layer_decision(
+                &MediaCacheEntry::Failed(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
+                &MediaFormat::File,
+                &mxc_uri,
+                PathBuf::from("/tmp/clip.mp4"),
+            ),
+            VideoFileLayerDecision::SetInlineError(
+                "Failed to fetch video from mxc://example.org/video (HTTP 500 Internal Server Error)"
+                    .to_string()
+            )
+        );
     }
 
     // ---- apply_video_slider_drag ----
@@ -857,12 +1311,7 @@ mod tests_video_message_player {
             playing: false,
             position_ms: 0,
         };
-        apply_video_slider_drag(
-            &mut state,
-            1.0,
-            4_000,
-            DragPhase::End { was_playing: true },
-        );
+        apply_video_slider_drag(&mut state, 1.0, 4_000, DragPhase::End { was_playing: true });
         assert!(!state.playing);
     }
 
@@ -970,6 +1419,451 @@ mod tests_video_message_player {
         state_b.lock().unwrap().position_ms = 4_321;
         assert_eq!(state_a.lock().unwrap().position_ms, 4_321);
         assert!(Arc::ptr_eq(&state_a, &state_b));
+    }
+
+    #[derive(Default, Debug)]
+    struct RecordingVideo {
+        uid: u64,
+        current_position_ms: u64,
+        playing: bool,
+        calls: Vec<String>,
+    }
+
+    impl RecordingVideo {
+        fn current_position_ms(&mut self) -> u64 {
+            self.calls.push("current_position_ms".to_string());
+            self.current_position_ms
+        }
+
+        fn stop_and_cleanup_resources(&mut self) {
+            self.calls.push("stop_and_cleanup_resources".to_string());
+            self.playing = false;
+        }
+
+        fn begin_playback(&mut self) {
+            self.calls.push("begin_playback".to_string());
+            self.playing = true;
+            self.current_position_ms = 0;
+        }
+
+        fn pause_playback(&mut self) {
+            self.calls.push("pause_playback".to_string());
+            self.playing = false;
+        }
+
+        fn seek_to(&mut self, position_ms: u64) {
+            self.calls.push(format!("seek_to({position_ms})"));
+            self.current_position_ms = position_ms;
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+    struct NextFrameToken(u64);
+
+    #[derive(Default, Debug)]
+    struct RecordingCx {
+        next_frame: u64,
+        calls: Vec<String>,
+    }
+
+    impl RecordingCx {
+        fn new_next_frame(&mut self) -> NextFrameToken {
+            let token = NextFrameToken(self.next_frame);
+            self.next_frame += 1;
+            token
+        }
+
+        fn seek_video_playback(&mut self, video_id: u64, position_ms: u64) {
+            self.calls
+                .push(format!("seek_video_playback({video_id}, {position_ms})"));
+        }
+    }
+
+    #[derive(Default, Debug)]
+    struct RecordingWindow {
+        calls: Vec<&'static str>,
+    }
+
+    impl RecordingWindow {
+        fn fullscreen(&mut self) {
+            self.calls.push("fullscreen");
+        }
+
+        fn disable_fullscreen(&mut self) {
+            self.calls.push("disable_fullscreen");
+        }
+    }
+
+    fn open_modal_sequence(
+        inline: &mut RecordingVideo,
+        modal: &mut RecordingVideo,
+        pending_modal_seek_ms: &mut Option<u64>,
+        pending_fullscreen: &mut Option<NextFrameToken>,
+        cx: &mut RecordingCx,
+    ) {
+        let main_pos_ms = inline.current_position_ms();
+        *pending_modal_seek_ms = Some(main_pos_ms);
+        inline.stop_and_cleanup_resources();
+        modal.begin_playback();
+        *pending_fullscreen = Some(cx.new_next_frame());
+    }
+
+    fn handle_modal_playback_prepared(
+        modal: &mut RecordingVideo,
+        pending_modal_seek_ms: &mut Option<u64>,
+        cx: &mut RecordingCx,
+        video_id: u64,
+    ) {
+        if let Some(position_ms) = pending_modal_seek_ms.take() {
+            cx.seek_video_playback(video_id, position_ms);
+            modal.seek_to(position_ms);
+        }
+    }
+
+    fn close_video_modal_sequence(inline: &mut RecordingVideo, modal: &mut RecordingVideo) {
+        modal.stop_and_cleanup_resources();
+        inline.begin_playback();
+    }
+
+    fn close_video_modal_sets_pending_normalize(
+        inline: &mut RecordingVideo,
+        modal: &mut RecordingVideo,
+        pending_normalize: &mut Option<NextFrameToken>,
+        cx: &mut RecordingCx,
+    ) {
+        close_video_modal_sequence(inline, modal);
+        *pending_normalize = Some(cx.new_next_frame());
+    }
+
+    fn apply_pending_fullscreen(
+        fired: &HashSet<NextFrameToken>,
+        window: &mut RecordingWindow,
+        pending_fullscreen: &mut Option<NextFrameToken>,
+    ) {
+        if pending_fullscreen.is_some_and(|token| fired.contains(&token)) {
+            window.fullscreen();
+            *pending_fullscreen = None;
+        }
+    }
+
+    fn apply_pending_normalize(
+        fired: &HashSet<NextFrameToken>,
+        window: &mut RecordingWindow,
+        pending_normalize: &mut Option<NextFrameToken>,
+    ) {
+        if pending_normalize.is_some_and(|token| fired.contains(&token)) {
+            window.disable_fullscreen();
+            *pending_normalize = None;
+        }
+    }
+
+    fn handle_active_track_changed(now_playing_uid: u64, players: &mut [RecordingVideo]) {
+        for player in players {
+            if player.uid != now_playing_uid && player.playing {
+                player.pause_playback();
+            }
+        }
+    }
+
+    #[derive(Default, Debug)]
+    struct RecordingModal {
+        open: bool,
+        calls: Vec<String>,
+    }
+
+    impl RecordingModal {
+        fn is_open(&self) -> bool {
+            self.open
+        }
+
+        fn close(&mut self) {
+            self.calls.push("close".to_string());
+            self.open = false;
+        }
+    }
+
+    fn close_video_modal_with_outer(
+        inline: &mut RecordingVideo,
+        modal_video: &mut RecordingVideo,
+        outer: &mut RecordingModal,
+        close_helper_invocations: &mut usize,
+    ) {
+        *close_helper_invocations += 1;
+        close_video_modal_sequence(inline, modal_video);
+        outer.close();
+    }
+
+    fn handle_key_down_for_modal(
+        key_code: &str,
+        inline: &mut RecordingVideo,
+        modal_video: &mut RecordingVideo,
+        outer: &mut RecordingModal,
+        close_helper_invocations: &mut usize,
+    ) {
+        if key_code == "Escape" && outer.is_open() {
+            close_video_modal_with_outer(inline, modal_video, outer, close_helper_invocations);
+        }
+    }
+
+    #[test]
+    fn test_maximise_captures_inline_position_before_stop() {
+        let mut inline = RecordingVideo {
+            current_position_ms: 3_500,
+            playing: true,
+            ..Default::default()
+        };
+        let mut modal = RecordingVideo::default();
+        let mut pending_modal_seek_ms = None;
+        let mut pending_fullscreen = None;
+        let mut cx = RecordingCx {
+            next_frame: 42,
+            ..Default::default()
+        };
+
+        open_modal_sequence(
+            &mut inline,
+            &mut modal,
+            &mut pending_modal_seek_ms,
+            &mut pending_fullscreen,
+            &mut cx,
+        );
+
+        assert_eq!(pending_modal_seek_ms, Some(3_500));
+        assert_eq!(
+            inline.calls,
+            vec!["current_position_ms", "stop_and_cleanup_resources"]
+        );
+    }
+
+    #[test]
+    fn test_modal_seeks_on_playback_prepared() {
+        let mut pending_modal_seek_ms = Some(3_500);
+        let mut modal = RecordingVideo::default();
+        let mut cx = RecordingCx::default();
+
+        handle_modal_playback_prepared(&mut modal, &mut pending_modal_seek_ms, &mut cx, 7);
+
+        assert_eq!(cx.calls, vec!["seek_video_playback(7, 3500)"]);
+        assert_eq!(modal.calls, vec!["seek_to(3500)"]);
+        assert_eq!(pending_modal_seek_ms, None);
+    }
+
+    #[test]
+    fn test_playback_prepared_without_pending_seek_is_noop() {
+        let mut pending_modal_seek_ms = None;
+        let mut modal = RecordingVideo::default();
+        let mut cx = RecordingCx::default();
+
+        handle_modal_playback_prepared(&mut modal, &mut pending_modal_seek_ms, &mut cx, 7);
+
+        assert!(cx.calls.is_empty());
+        assert!(modal.calls.is_empty());
+    }
+
+    #[test]
+    fn test_close_does_not_preserve_position() {
+        let mut inline = RecordingVideo::default();
+        let mut modal = RecordingVideo {
+            current_position_ms: 2_000,
+            ..Default::default()
+        };
+
+        close_video_modal_sequence(&mut inline, &mut modal);
+
+        assert_eq!(modal.calls, vec!["stop_and_cleanup_resources"]);
+        assert_eq!(inline.calls, vec!["begin_playback"]);
+        assert!(!modal.calls.contains(&"current_position_ms".to_string()));
+    }
+
+    #[test]
+    fn test_open_sequence_sets_pending_fullscreen() {
+        let mut inline = RecordingVideo::default();
+        let mut modal = RecordingVideo::default();
+        let mut pending_modal_seek_ms = None;
+        let mut pending_fullscreen = None;
+        let mut cx = RecordingCx {
+            next_frame: 42,
+            ..Default::default()
+        };
+
+        open_modal_sequence(
+            &mut inline,
+            &mut modal,
+            &mut pending_modal_seek_ms,
+            &mut pending_fullscreen,
+            &mut cx,
+        );
+
+        assert_eq!(pending_fullscreen, Some(NextFrameToken(42)));
+    }
+
+    #[test]
+    fn test_handle_next_frame_applies_fullscreen_once() {
+        let mut window = RecordingWindow::default();
+        let mut pending_fullscreen = Some(NextFrameToken(42));
+        let fired = HashSet::from([NextFrameToken(42)]);
+
+        apply_pending_fullscreen(&fired, &mut window, &mut pending_fullscreen);
+        apply_pending_fullscreen(&fired, &mut window, &mut pending_fullscreen);
+
+        assert_eq!(window.calls, vec!["fullscreen"]);
+        assert_eq!(pending_fullscreen, None);
+    }
+
+    #[test]
+    fn test_handle_next_frame_waits_for_matching_token() {
+        let mut window = RecordingWindow::default();
+        let mut pending_fullscreen = Some(NextFrameToken(42));
+        let fired = HashSet::from([NextFrameToken(7)]);
+
+        apply_pending_fullscreen(&fired, &mut window, &mut pending_fullscreen);
+
+        assert!(window.calls.is_empty());
+        assert_eq!(pending_fullscreen, Some(NextFrameToken(42)));
+    }
+
+    #[test]
+    fn test_close_video_modal_sets_pending_normalize() {
+        let mut inline = RecordingVideo::default();
+        let mut modal = RecordingVideo::default();
+        let mut pending_normalize = None;
+        let mut cx = RecordingCx {
+            next_frame: 99,
+            ..Default::default()
+        };
+
+        close_video_modal_sets_pending_normalize(
+            &mut inline,
+            &mut modal,
+            &mut pending_normalize,
+            &mut cx,
+        );
+
+        assert_eq!(pending_normalize, Some(NextFrameToken(99)));
+    }
+
+    #[test]
+    fn test_handle_next_frame_applies_disable_fullscreen() {
+        let mut window = RecordingWindow::default();
+        let mut pending_normalize = Some(NextFrameToken(99));
+        let fired = HashSet::from([NextFrameToken(99)]);
+
+        apply_pending_normalize(&fired, &mut window, &mut pending_normalize);
+
+        assert_eq!(window.calls, vec!["disable_fullscreen"]);
+        assert_eq!(pending_normalize, None);
+    }
+
+    #[test]
+    fn test_active_track_changed_pauses_others() {
+        let mut players = [
+            RecordingVideo {
+                uid: 1,
+                playing: true,
+                ..Default::default()
+            },
+            RecordingVideo {
+                uid: 2,
+                playing: true,
+                ..Default::default()
+            },
+        ];
+
+        handle_active_track_changed(2, &mut players);
+
+        assert_eq!(players[0].calls, vec!["pause_playback"]);
+        assert!(!players[0]
+            .calls
+            .contains(&"stop_and_cleanup_resources".to_string()));
+        assert!(players[1].calls.is_empty());
+    }
+
+    #[test]
+    fn test_escape_calls_close_when_modal_open() {
+        let mut inline = RecordingVideo::default();
+        let mut modal_video = RecordingVideo::default();
+        let mut outer = RecordingModal {
+            open: true,
+            ..Default::default()
+        };
+        let mut close_helper_invocations = 0;
+
+        handle_key_down_for_modal(
+            "Escape",
+            &mut inline,
+            &mut modal_video,
+            &mut outer,
+            &mut close_helper_invocations,
+        );
+
+        assert_eq!(modal_video.calls, vec!["stop_and_cleanup_resources"]);
+        assert_eq!(inline.calls, vec!["begin_playback"]);
+        assert!(outer.calls.contains(&"close".to_string()));
+    }
+
+    #[test]
+    fn test_escape_ignored_when_modal_closed() {
+        let mut inline = RecordingVideo::default();
+        let mut modal_video = RecordingVideo::default();
+        let mut outer = RecordingModal::default();
+        let mut close_helper_invocations = 0;
+
+        handle_key_down_for_modal(
+            "Escape",
+            &mut inline,
+            &mut modal_video,
+            &mut outer,
+            &mut close_helper_invocations,
+        );
+
+        assert!(modal_video.calls.is_empty());
+        assert!(inline.calls.is_empty());
+        assert!(!outer.calls.contains(&"close".to_string()));
+    }
+
+    #[test]
+    fn test_non_escape_key_does_not_close_modal() {
+        let mut inline = RecordingVideo::default();
+        let mut modal_video = RecordingVideo::default();
+        let mut outer = RecordingModal {
+            open: true,
+            ..Default::default()
+        };
+        let mut close_helper_invocations = 0;
+
+        handle_key_down_for_modal(
+            "Space",
+            &mut inline,
+            &mut modal_video,
+            &mut outer,
+            &mut close_helper_invocations,
+        );
+
+        assert!(modal_video.calls.is_empty());
+        assert!(inline.calls.is_empty());
+        assert!(!outer.calls.contains(&"close".to_string()));
+    }
+
+    #[test]
+    fn test_all_close_paths_route_through_helper() {
+        let mut close_helper_invocations = 0;
+
+        for _ in ["close_button", "scrim", "escape"] {
+            let mut inline = RecordingVideo::default();
+            let mut modal_video = RecordingVideo::default();
+            let mut outer = RecordingModal {
+                open: true,
+                ..Default::default()
+            };
+            close_video_modal_with_outer(
+                &mut inline,
+                &mut modal_video,
+                &mut outer,
+                &mut close_helper_invocations,
+            );
+        }
+
+        assert_eq!(close_helper_invocations, 3);
     }
 
     #[test]

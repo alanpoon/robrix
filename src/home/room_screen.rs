@@ -32,7 +32,7 @@ use crate::{
     },
     room::{BasicRoomDetails, room_input_bar::{RoomInputBarState, RoomInputBarWidgetRefExt}, typing_notice::TypingNoticeWidgetExt},
     shared::{
-        animated_image::{AnimatedImageRef, AnimatedImageWidgetRefExt}, audio_message_player::{AudioMessagePlayerRef, AudioMessagePlayerWidgetRefExt}, avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt, video_message_player::{VideoMessagePlayerRef, VideoMessagePlayerWidgetRefExt}, video_message_player_modal::{VideoMessagePlayerModalAction, VideoMessagePlayerModalWidgetExt}
+        animated_image::{AnimatedImageRef, AnimatedImageWidgetRefExt}, audio_message_player::{AudioMessagePlayerRef, AudioMessagePlayerWidgetRefExt}, avatar::{AvatarState, AvatarWidgetRefExt}, confirmation_modal::ConfirmationModalContent, html_or_plaintext::{HtmlOrPlaintextRef, HtmlOrPlaintextWidgetRefExt, RobrixHtmlLinkAction}, image_viewer::{ImageViewerAction, ImageViewerMetaData, LoadState}, jump_to_bottom_button::{JumpToBottomButtonWidgetExt, UnreadMessageCount}, popup_list::{PopupKind, enqueue_popup_notification}, restore_status_view::RestoreStatusViewWidgetExt, styles::*, text_or_image::{TextOrImageAction, TextOrImageRef, TextOrImageWidgetRefExt}, timestamp::TimestampWidgetRefExt, video_message_player::{VideoMessagePlayerRef, VideoMessagePlayerWidgetRefExt, VideoPlaybackAction}, video_message_player_modal::{VideoMessagePlayerModalAction, VideoMessagePlayerModalWidgetExt, WindowFullscreenAction}
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, MatrixRequest, PaginationDirection, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
@@ -53,7 +53,7 @@ use super::{event_reaction_list::ReactionData, loading_pane::LoadingPaneRef, new
 const MAX_ITEMS_TO_SEARCH_THROUGH: usize = 100;
 
 /// The max size (width or height) of a blurhash image to decode.
-const BLURHASH_IMAGE_MAX_SIZE: u32 = 500;
+pub const BLURHASH_IMAGE_MAX_SIZE: u32 = 500;
 
 static UNNAMED_ROOM: &str = "Unnamed Room";
 
@@ -919,6 +919,10 @@ pub struct RoomScreen {
     #[rust] all_rooms_loaded: bool,
     /// Whether the in-room app service quick actions card is currently visible.
     #[rust] show_app_service_actions: bool,
+    #[rust] pending_fullscreen: Option<NextFrame>,
+    #[rust] pending_normalize: Option<NextFrame>,
+    #[rust] pending_modal_seek_ms: Option<u64>,
+    #[rust] active_video_inline_uid: Option<WidgetUid>,
 }
 
 impl Drop for RoomScreen {
@@ -952,6 +956,38 @@ impl Widget for RoomScreen {
         let portal_list = self.portal_list(cx, ids!(timeline.list));
         let user_profile_sliding_pane = self.user_profile_sliding_pane(cx, ids!(user_profile_sliding_pane));
         let loading_pane = self.loading_pane(cx, ids!(loading_pane));
+
+        if let Some(pending) = self.pending_fullscreen {
+            if pending.is_event(event).is_some() {
+                // main_window lives above RoomScreen in the widget tree, so
+                // self.view.window(...) cannot reach it. Relay through App.
+                Cx::post_action(WindowFullscreenAction::Enable);
+                self.pending_fullscreen = None;
+            }
+        }
+        if let Some(pending) = self.pending_normalize {
+            if pending.is_event(event).is_some() {
+                Cx::post_action(WindowFullscreenAction::Disable);
+                self.pending_normalize = None;
+            }
+        }
+        if (event.back_pressed()
+            || matches!(event, Event::KeyDown(KeyEvent { key_code: KeyCode::Escape, .. })))
+            && self.view.modal(cx, ids!(video_message_player_modal)).is_open()
+        {
+            self.close_video_modal(cx);
+        }
+        if let Event::VideoPlaybackPrepared(video_event) = event {
+            if self.view.modal(cx, ids!(video_message_player_modal)).is_open() {
+                if let Some(position_ms) = self.pending_modal_seek_ms.take() {
+                    cx.seek_video_playback(video_event.video_id, position_ms);
+                    self.view
+                        .video_message_player_modal(cx, ids!(video_message_player_modal_inner))
+                        .robrix_video(cx)
+                        .seek_to(cx, position_ms);
+                }
+            }
+        }
 
         // Handle actions here before processing timeline updates.
         // Normally (in most other widgets), the order of event handling doesn't matter much.
@@ -1444,34 +1480,59 @@ impl Widget for RoomScreen {
                     None => {}
                 }
 
+                if matches!(action.downcast_ref(), Some(ModalAction::Dismissed))
+                    && self.active_video_inline_uid.is_some()
+                {
+                    self.close_video_modal(cx);
+                    return false;
+                }
+
                 match action.downcast_ref::<VideoMessagePlayerModalAction>() {
                     Some(VideoMessagePlayerModalAction::Open {
-                        player_state,
-                        volume_state,
-                        ui_state,
+                        inline_uid,
+                        source_url,
+                        blurhash,
                         summary,
+                        position_ms,
                     }) => {
-                        self.view
-                            .video_message_player_modal(cx, ids!(video_message_player_modal_inner))
-                            .show(
-                                cx,
-                                player_state.clone(),
-                                volume_state.clone(),
-                                ui_state.clone(),
-                                summary.clone(),
-                            );
-                        self.view
-                            .modal(cx, ids!(video_message_player_modal))
-                            .open(cx);
+                        self.active_video_inline_uid = Some(*inline_uid);
+                        self.pending_modal_seek_ms = Some(*position_ms);
+                        let modal_inner = self
+                            .view
+                            .video_message_player_modal(cx, ids!(video_message_player_modal_inner));
+                        Cx::post_action(VideoPlaybackAction::ActiveTrackChanged {
+                            now_playing: *inline_uid,
+                        });
+                        modal_inner.show(
+                            cx,
+                            *inline_uid,
+                            source_url.clone(),
+                            blurhash.clone(),
+                            summary.clone(),
+                        );
+                        self.view.modal(cx, ids!(video_message_player_modal)).open(cx);
+                        modal_inner.robrix_video(cx).begin_playback(cx);
+                        modal_inner.set_playing(cx, true);
+                        self.pending_fullscreen = Some(cx.new_next_frame());
                         return false;
                     }
                     Some(VideoMessagePlayerModalAction::Close) => {
-                        self.view
-                            .modal(cx, ids!(video_message_player_modal))
-                            .close(cx);
+                        self.close_video_modal(cx);
                         return false;
                     }
                     None => {}
+                }
+
+                if matches!(action.as_widget_action().cast(), VideoAction::PlaybackPrepared)
+                    && self.view.modal(cx, ids!(video_message_player_modal)).is_open()
+                {
+                    if let Some(position_ms) = self.pending_modal_seek_ms.take() {
+                        self.view
+                            .video_message_player_modal(cx, ids!(video_message_player_modal_inner))
+                            .robrix_video(cx)
+                            .seek_to(cx, position_ms);
+                    }
+                    return false;
                 }
 
                 match action.downcast_ref::<DeleteBotModalAction>() {
@@ -1806,6 +1867,18 @@ impl RoomScreen {
 
     fn close_delete_bot_modal(&self, cx: &mut Cx) {
         self.view.modal(cx, ids!(delete_bot_modal)).close(cx);
+    }
+
+    fn close_video_modal(&mut self, cx: &mut Cx) {
+        self.view
+            .video_message_player_modal(cx, ids!(video_message_player_modal_inner))
+            .robrix_video(cx)
+            .stop_and_cleanup_resources(cx);
+        if let Some(inline_uid) = self.active_video_inline_uid.take() {
+            Cx::post_action(VideoPlaybackAction::ResumeInlineAfterModal { inline_uid });
+        }
+        self.pending_normalize = Some(cx.new_next_frame());
+        self.view.modal(cx, ids!(video_message_player_modal)).close(cx);
     }
 
     fn open_create_bot_modal(&mut self, cx: &mut Cx) {
@@ -2158,7 +2231,7 @@ impl RoomScreen {
                         // FIXME: `smooth_scroll_to` should accept a scroll offset parameter too,
                         //       so that we can scroll to the replied-to message and have it
                         //       appear beneath the top of the viewport.
-                        portal_list.smooth_scroll_to(cx, index.saturating_sub(1), speed, None);
+                        portal_list.smooth_scroll_to(cx, index.saturating_sub(1), speed, None, 0.0);
                         // start highlight animation.
                         tl.message_highlight_animation_state = MessageHighlightAnimationState::Pending {
                             item_id: index
@@ -2882,7 +2955,7 @@ impl RoomScreen {
             // FIXME: `smooth_scroll_to` should accept a "scroll offset" (first scroll) parameter too,
             //       so that we can scroll to the replied-to message and have it
             //       appear beneath the top of the viewport.
-            portal_list.smooth_scroll_to(cx, index.saturating_sub(1), speed, None);
+            portal_list.smooth_scroll_to(cx, index.saturating_sub(1), speed, None, 0.0);
             // start highlight animation.
             tl.message_highlight_animation_state = MessageHighlightAnimationState::Pending {
                 item_id: index
@@ -4662,14 +4735,29 @@ fn populate_video_message_content(
         .as_ref()
         .and_then(|info| info.thumbnail_source.clone());
     message_content_widget.show_html(cx, crate::event_preview::video_summary_html(&summary));
-    video_player.populate_from_summary(
+    let (blurhash, blurhash_dimensions) = video.info.as_ref().map_or((None, None), |info| {
+        (
+            info.blurhash.clone(),
+            match (info.width, info.height) {
+                (Some(width), Some(height)) => {
+                    let (Ok(width), Ok(height)) = (width.try_into(), height.try_into()) else {
+                        return (info.blurhash.clone(), None);
+                    };
+                    Some((width, height))
+                }
+                _ => None,
+            },
+        )
+    });
+    video_player.populate_from_summary_and_blurhash(
         cx,
         summary,
         video.source.clone(),
         poster_source,
+        blurhash,
+        blurhash_dimensions,
         media_cache,
-    );
-    true
+    )
 }
 
 

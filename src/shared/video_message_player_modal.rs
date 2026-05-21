@@ -47,12 +47,14 @@
 //! are present.
 
 use makepad_widgets::*;
+use std::path::PathBuf;
 
 use crate::{
     event_preview::format_mmss,
+    shared::robrix_video::{RobrixVideoRef, RobrixVideoWidgetExt},
     shared::video_message_player::{
-        apply_video_slider_drag, apply_volume_action, DragPhase, SharedPlayerState,
-        SharedUiState, SharedVolumeState, VideoSummary, VolumeAction,
+        apply_video_slider_drag, apply_volume_action, DragPhase, SharedPlayerState, SharedUiState,
+        SharedVolumeState, VideoPlaybackAction, VideoSummary, VolumeAction,
     },
 };
 
@@ -98,6 +100,11 @@ script_mod! {
         // `VideoMessagePlayer` reads it from `ui_state.card_rect` and
         // promotes its `Video` surface draw into it via its own
         // elevated `DrawList2d`.
+        robrix_video := RobrixVideo {
+            width: Fill
+            height: Fill
+        }
+
         controls := View {
             width: Fill
             height: Fill
@@ -248,15 +255,29 @@ pub enum VideoMessagePlayerModalAction {
     /// handler. The host calls `inner.show(cx, ...)` with this payload
     /// and then opens the outer `Modal`.
     Open {
-        player_state: SharedPlayerState,
-        volume_state: SharedVolumeState,
-        ui_state: SharedUiState,
+        inline_uid: WidgetUid,
+        source_url: PathBuf,
+        blurhash: Option<String>,
         summary: VideoSummary,
+        position_ms: u64,
     },
     /// Emitted by this widget when its `close_button` is clicked. The
     /// host receives this and calls `outer.close(cx)`. NOT emitted in
     /// response to `ModalAction::Dismissed` (to avoid an action loop).
     Close,
+}
+
+/// Relay action used by the video maximise/close flow to ask the
+/// `App`-level handler (which owns the `main_window` `WindowRef`) to
+/// toggle OS fullscreen. `RoomScreen` cannot call `Window::fullscreen`
+/// directly because `main_window` lives above `RoomScreen` in the
+/// widget tree; this action bridges that gap.
+#[derive(Clone, Debug)]
+pub enum WindowFullscreenAction {
+    /// Maps to `self.ui.window(cx, ids!(main_window)).fullscreen(cx)`.
+    Enable,
+    /// Maps to `self.ui.window(cx, ids!(main_window)).disable_fullscreen(cx)`.
+    Disable,
 }
 
 // ============================================================================
@@ -265,18 +286,28 @@ pub enum VideoMessagePlayerModalAction {
 
 #[derive(Script, ScriptHook, Widget)]
 pub struct VideoMessagePlayerModal {
-    #[deref] view: View,
+    #[deref]
+    view: View,
 
     // Shared state handles — populated by `show`.
-    #[rust] player_state: Option<SharedPlayerState>,
-    #[rust] volume_state: Option<SharedVolumeState>,
-    #[rust] ui_state: Option<SharedUiState>,
-    #[rust] summary: Option<VideoSummary>,
+    #[rust]
+    player_state: Option<SharedPlayerState>,
+    #[rust]
+    volume_state: Option<SharedVolumeState>,
+    #[rust]
+    ui_state: Option<SharedUiState>,
+    #[rust]
+    summary: Option<VideoSummary>,
+    #[rust]
+    source_url: Option<PathBuf>,
+    #[rust]
+    origin_inline_uid: Option<WidgetUid>,
 
     /// Snapshot of `player_state.playing` taken at the start of a slider
     /// drag so the drag-end resume rule sees the pre-drag value rather
     /// than the mid-drag `playing = false`.
-    #[rust] slider_drag_was_playing: Option<bool>,
+    #[rust]
+    slider_drag_was_playing: Option<bool>,
 }
 
 impl Widget for VideoMessagePlayerModal {
@@ -305,6 +336,20 @@ impl Widget for VideoMessagePlayerModal {
 
 impl WidgetMatchEvent for VideoMessagePlayerModal {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
+        for action in actions {
+            if let Some(VideoPlaybackAction::ActiveTrackChanged { now_playing }) =
+                action.downcast_ref::<VideoPlaybackAction>()
+            {
+                if self
+                    .origin_inline_uid
+                    .is_some_and(|origin_uid| origin_uid != *now_playing)
+                {
+                    self.robrix_video_ref(cx).pause_playback(cx);
+                    self.set_playing(cx, false);
+                }
+            }
+        }
+
         // ---- Outer `Modal` dismissed (scrim / Escape / back-press) ----
         //
         // The outer Modal already self-closes; we just need to flip
@@ -334,11 +379,17 @@ impl WidgetMatchEvent for VideoMessagePlayerModal {
             .view
             .button(cx, ids!(controls.center_controls.pause_button));
         if play.clicked(actions) || pause.clicked(actions) {
-            if let Some(state) = &self.player_state {
-                if let Ok(mut guard) = state.lock() {
-                    guard.playing = !guard.playing;
-                }
+            let playing = self
+                .player_state
+                .as_ref()
+                .and_then(|state| state.lock().ok().map(|guard| guard.playing))
+                .unwrap_or(false);
+            if playing {
+                self.robrix_video_ref(cx).pause_playback(cx);
+            } else {
+                self.robrix_video_ref(cx).begin_playback(cx);
             }
+            self.set_playing(cx, !playing);
             self.sync_controls_from_state(cx);
         }
 
@@ -356,6 +407,11 @@ impl WidgetMatchEvent for VideoMessagePlayerModal {
                         VolumeAction::Mute
                     };
                     apply_volume_action(&mut guard, action);
+                    if guard.muted {
+                        self.robrix_video_ref(cx).mute_playback(cx);
+                    } else {
+                        self.robrix_video_ref(cx).unmute_playback(cx);
+                    }
                 }
             }
             self.sync_controls_from_state(cx);
@@ -412,16 +468,20 @@ impl VideoMessagePlayerModal {
     pub fn show(
         &mut self,
         cx: &mut Cx,
-        player_state: SharedPlayerState,
-        volume_state: SharedVolumeState,
-        ui_state: SharedUiState,
+        origin_inline_uid: WidgetUid,
+        source_url: PathBuf,
+        blurhash: Option<String>,
         summary: VideoSummary,
     ) {
-        self.player_state = Some(player_state);
-        self.volume_state = Some(volume_state);
-        self.ui_state = Some(ui_state);
+        self.origin_inline_uid = Some(origin_inline_uid);
+        self.source_url = Some(source_url.clone());
+        self.player_state = Some(Default::default());
+        self.volume_state = Some(Default::default());
+        self.ui_state = Some(Default::default());
         self.summary = Some(summary);
         self.slider_drag_was_playing = None;
+        self.robrix_video_ref(cx).set_blurhash(cx, blurhash);
+        self.robrix_video_ref(cx).set_source_url(cx, source_url);
 
         self.view
             .button(cx, ids!(controls.close_button))
@@ -438,6 +498,19 @@ impl VideoMessagePlayerModal {
 
         self.sync_controls_from_state(cx);
         self.view.redraw(cx);
+    }
+
+    pub fn robrix_video_ref(&self, cx: &mut Cx) -> RobrixVideoRef {
+        self.view.robrix_video(cx, ids!(robrix_video))
+    }
+
+    pub fn set_playing(&mut self, cx: &mut Cx, playing: bool) {
+        if let Some(state) = &self.player_state {
+            if let Ok(mut guard) = state.lock() {
+                guard.playing = playing;
+            }
+        }
+        self.sync_controls_from_state(cx);
     }
 
     fn set_maximised(&self, value: bool) {
@@ -514,15 +587,27 @@ impl VideoMessagePlayerModalRef {
     pub fn show(
         &self,
         cx: &mut Cx,
-        player_state: SharedPlayerState,
-        volume_state: SharedVolumeState,
-        ui_state: SharedUiState,
+        origin_inline_uid: WidgetUid,
+        source_url: PathBuf,
+        blurhash: Option<String>,
         summary: VideoSummary,
     ) {
         let Some(mut inner) = self.borrow_mut() else {
             return;
         };
-        inner.show(cx, player_state, volume_state, ui_state, summary);
+        inner.show(cx, origin_inline_uid, source_url, blurhash, summary);
+    }
+
+    pub fn robrix_video(&self, cx: &mut Cx) -> RobrixVideoRef {
+        self.borrow()
+            .map(|inner| inner.robrix_video_ref(cx))
+            .unwrap_or_default()
+    }
+
+    pub fn set_playing(&self, cx: &mut Cx, playing: bool) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_playing(cx, playing);
+        }
     }
 }
 
