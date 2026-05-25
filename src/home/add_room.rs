@@ -32,7 +32,25 @@ script_mod! {
                 text_style: theme.font_regular {font_size: 18},
             }
         }
-        
+
+        tab_row := View {
+            width: Fill, height: Fit,
+            flow: Right, spacing: 8,
+            margin: Inset{top: 8, bottom: 4}
+            join_existing_tab := RobrixNeutralIconButton {
+                padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
+                text: "Join existing room"
+            }
+            create_new_tab := RobrixNeutralIconButton {
+                padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
+                text: "Create new room"
+            }
+        }
+
+        join_existing_view := View {
+            width: Fill, height: Fit,
+            flow: Down
+
         LineH { padding: 10, margin: Inset{top: 10, right: 2} }
 
         SubsectionLabel {
@@ -248,7 +266,18 @@ script_mod! {
                 }
             }
         }
-        
+
+        } // end join_existing_view
+
+        create_new_view := View {
+            visible: false
+            width: Fill, height: Fit,
+            flow: Down
+
+            create_room_screen := mod.widgets.CreateRoomScreen {
+                height: Fit
+            }
+        }
     }
 }
 
@@ -348,8 +377,21 @@ impl AddRoomState {
 impl Widget for AddRoomScreen {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         self.view.handle_event(cx, event, scope);
-        
+
         if let Event::Actions(actions) = event {
+            let join_existing_tab = self.view.button(cx, ids!(join_existing_tab));
+            let create_new_tab = self.view.button(cx, ids!(create_new_tab));
+            if join_existing_tab.clicked(actions) {
+                self.view.view(cx, ids!(join_existing_view)).set_visible(cx, true);
+                self.view.view(cx, ids!(create_new_view)).set_visible(cx, false);
+                self.redraw(cx);
+            }
+            if create_new_tab.clicked(actions) {
+                self.view.view(cx, ids!(join_existing_view)).set_visible(cx, false);
+                self.view.view(cx, ids!(create_new_view)).set_visible(cx, true);
+                self.redraw(cx);
+            }
+
             let room_alias_id_input = self.view.text_input(cx, ids!(room_alias_id_input));
             let search_for_room_button = self.view.button(cx, ids!(search_for_room_button));
             let cancel_button = self.view.button(cx, ids!(fetched_room_summary.buttons_view.cancel_button));

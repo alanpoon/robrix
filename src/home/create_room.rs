@@ -21,6 +21,7 @@ use ruma::{
     EventEncryptionAlgorithm,
 };
 
+use crate::shared::popup_list::{enqueue_popup_notification, PopupKind};
 use crate::sliding_sync::{submit_async_request, MatrixRequest};
 
 // ============================================================================
@@ -215,39 +216,182 @@ script_mod! {
         SubsectionLabel {
             text: "Room name (required)"
         }
-        name_input := TextInput {
+        name_input := RobrixTextInput {
             width: Fill,
             empty_text: "Project Alpha"
         }
 
         SubsectionLabel { text: "Topic (optional)" }
-        topic_input := TextInput {
+        topic_input := RobrixTextInput {
             width: Fill,
             empty_text: "What's this room about?"
         }
 
+        SubsectionLabel { text: "Avatar (optional)" }
+        Label {
+            width: Fill, height: Fit
+            draw_text +: {
+                color: (MESSAGE_TEXT_COLOR)
+                text_style: MESSAGE_TEXT_STYLE { font_size: 10 }
+            }
+            text: "Upload an image to represent the room."
+        }
+        avatar_row := View {
+            width: Fill, height: Fit
+            flow: Right, spacing: 12
+            align: Align{ y: 0.5 }
+            avatar_preview_view := RoundedView {
+                width: 80, height: 80
+                align: Align{ x: 0.5, y: 0.5 }
+                show_bg: true
+                draw_bg: {
+                    color: (COLOR_PRIMARY)
+                    border_size: 1.0
+                    border_color: (COLOR_SECONDARY_DARKER)
+                    border_radius: 6.0
+                }
+                avatar_preview_image := Image {
+                    visible: false
+                    fit: ImageFit.Stretch
+                    width: 72, height: 72
+                }
+                avatar_preview_caption := Label {
+                    width: Fit, height: Fit
+                    draw_text +: {
+                        color: (MESSAGE_TEXT_COLOR)
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 9 }
+                    }
+                    text: "No image"
+                }
+            }
+            avatar_actions := View {
+                width: Fit, height: Fit
+                flow: Down, spacing: 4
+                upload_image_button := RobrixIconButton {
+                    draw_icon.svg: (ICON_UPLOAD)
+                    icon_walk: Walk{ width: 14, height: 14 }
+                    text: "Upload image"
+                }
+                Label {
+                    width: Fit, height: Fit
+                    draw_text +: {
+                        color: (MESSAGE_TEXT_COLOR)
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 9 }
+                    }
+                    text: "JPG, PNG or GIF. Max 4 MB."
+                }
+            }
+        }
+
         SubsectionLabel { text: "Visibility" }
         visibility_row := View {
-            width: Fill, height: Fit,
-            flow: Right, spacing: 10,
-            visibility_private := CheckBox {
-                text: "Private (invite only)"
-                value: true
+            width: Fill, height: Fit
+            flow: Right, spacing: 12
+            visibility_public_card := RoundedView {
+                width: Fill, height: Fit
+                flow: Down
+                padding: 12, spacing: 6
+                show_bg: true
+                draw_bg: {
+                    color: (COLOR_PRIMARY)
+                    border_size: 1.0
+                    border_color: (COLOR_SECONDARY_DARKER)
+                    border_radius: 6.0
+                }
+                visibility_public_header := View {
+                    width: Fill, height: Fit
+                    flow: Right, spacing: 8
+                    align: Align{ y: 0.5 }
+                    Icon {
+                        draw_icon +: {
+                            svg: (ICON_GLOBE)
+                            color: (COLOR_TEXT)
+                        }
+                        icon_walk: Walk{ width: 20, height: 20 }
+                    }
+                    visibility_public := RadioButtonFlat {
+                        text: "Public"
+                        draw_text +: {
+                            color: (COLOR_TEXT)
+                            color_hover: (COLOR_TEXT)
+                            color_focus: (COLOR_TEXT)
+                            color_down: (COLOR_TEXT)
+                            color_active: (COLOR_TEXT)
+                            color_disabled: (COLOR_TEXT)
+                            text_style: MESSAGE_TEXT_STYLE { font_size: 13 }
+                        }
+                    }
+                }
+                Label {
+                    width: Fill, height: Fit
+                    draw_text +: {
+                        color: (MESSAGE_TEXT_COLOR)
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 10 }
+                    }
+                    text: "Anyone can discover and join this room."
+                }
             }
-            visibility_public := CheckBox {
-                text: "Public"
-                value: false
+            visibility_private_card := RoundedView {
+                width: Fill, height: Fit
+                flow: Down
+                padding: 12, spacing: 6
+                show_bg: true
+                draw_bg: {
+                    color: (COLOR_PRIMARY)
+                    border_size: 2.0
+                    border_color: (COLOR_FG_ACCEPT_GREEN)
+                    border_radius: 6.0
+                }
+                visibility_private_header := View {
+                    width: Fill, height: Fit
+                    flow: Right, spacing: 8
+                    align: Align{ y: 0.5 }
+                    Icon {
+                        draw_icon +: {
+                            svg: (ICON_LOCK)
+                            color: (COLOR_TEXT)
+                        }
+                        icon_walk: Walk{ width: 20, height: 20 }
+                    }
+                    visibility_private := RadioButtonFlat {
+                        text: "Private"
+                        animator: { active: { default: on } }
+                        draw_text +: {
+                            color: (COLOR_TEXT)
+                            color_hover: (COLOR_TEXT)
+                            color_focus: (COLOR_TEXT)
+                            color_down: (COLOR_TEXT)
+                            color_active: (COLOR_TEXT)
+                            color_disabled: (COLOR_TEXT)
+                            text_style: MESSAGE_TEXT_STYLE { font_size: 13 }
+                        }
+                    }
+                }
+                Label {
+                    width: Fill, height: Fit
+                    draw_text +: {
+                        color: (MESSAGE_TEXT_COLOR)
+                        text_style: MESSAGE_TEXT_STYLE { font_size: 10 }
+                    }
+                    text: "Only invited people can join this room."
+                }
             }
         }
 
         SubsectionLabel { text: "End-to-end encryption" }
-        e2ee_toggle := CheckBox {
+        e2ee_toggle := CheckBoxFlat {
             text: "Enable E2EE for this room"
-            value: false
+            active: false
+            draw_text +: {
+                color: (COLOR_TEXT)
+                color_hover: (COLOR_TEXT)
+                color_focus: (COLOR_TEXT)
+                color_down: (COLOR_TEXT)
+            }
         }
 
         SubsectionLabel { text: "Invite people (matrix IDs, space- or comma-separated)" }
-        invitees_input := TextInput {
+        invitees_input := RobrixTextInput {
             width: Fill,
             empty_text: "@alice:matrix.org, @bob:matrix.org"
         }
@@ -258,7 +402,7 @@ script_mod! {
             text: ""
         }
 
-        create_button := Button {
+        create_button := RobrixPositiveIconButton {
             width: Fit,
             text: "Create room"
         }
@@ -268,6 +412,8 @@ script_mod! {
 #[derive(Script, Widget, ScriptHook)]
 pub struct CreateRoomScreen {
     #[deref] view: View,
+    #[rust] avatar_bytes: Option<Vec<u8>>,
+    #[rust] avatar_mime: Option<String>,
 }
 
 impl Widget for CreateRoomScreen {
@@ -283,6 +429,19 @@ impl Widget for CreateRoomScreen {
 
 impl WidgetMatchEvent for CreateRoomScreen {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
+        let visibility_set = self.view.radio_button_set(cx, ids_array!(
+            visibility_public,
+            visibility_private,
+        ));
+        if visibility_set.selected(cx, actions).is_some() {
+            self.sync_visibility_card_highlight(cx);
+            self.redraw(cx);
+        }
+
+        if self.view.button(cx, ids!(upload_image_button)).clicked(actions) {
+            self.handle_avatar_upload(cx);
+        }
+
         let create_button = self.view.button(cx, ids!(create_button));
         if create_button.clicked(actions) {
             let config = self.collect_config(cx);
@@ -300,6 +459,48 @@ impl WidgetMatchEvent for CreateRoomScreen {
                 }
             }
         }
+
+        for action in actions {
+            match action.downcast_ref::<CreateRoomAction>() {
+                Some(CreateRoomAction::Created { room_id }) => {
+                    self.view
+                        .label(cx, ids!(validation_label))
+                        .set_text(cx, &format!("Room created: {room_id}"));
+                    self.reset_inputs(cx);
+                    enqueue_popup_notification(
+                        format!("Room created: {room_id}"),
+                        PopupKind::Success,
+                        Some(4.0),
+                    );
+                    self.redraw(cx);
+                }
+                Some(CreateRoomAction::PartialInvite { room_id, failed }) => {
+                    let failed_list = failed
+                        .iter()
+                        .map(|u| u.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let msg = format!(
+                        "Room created ({room_id}), but invites failed for: {failed_list}"
+                    );
+                    self.view
+                        .label(cx, ids!(validation_label))
+                        .set_text(cx, &msg);
+                    self.reset_inputs(cx);
+                    enqueue_popup_notification(msg, PopupKind::Warning, None);
+                    self.redraw(cx);
+                }
+                Some(CreateRoomAction::Failed { reason }) => {
+                    let msg = format!("Failed to create room: {reason}");
+                    self.view
+                        .label(cx, ids!(validation_label))
+                        .set_text(cx, &msg);
+                    enqueue_popup_notification(msg, PopupKind::Error, None);
+                    self.redraw(cx);
+                }
+                None => {}
+            }
+        }
     }
 }
 
@@ -312,7 +513,7 @@ impl CreateRoomScreen {
         let (parsed_invitees, _failed) = parse_invitee_list(&invitees_raw);
         let public = self
             .view
-            .check_box(cx, ids!(visibility_public))
+            .radio_button(cx, ids!(visibility_public))
             .active(cx);
         let visibility = if public {
             RoomVisibilityChoice::Public
@@ -323,11 +524,115 @@ impl CreateRoomScreen {
         CreateRoomConfig {
             name,
             topic,
-            avatar_bytes: None,
-            avatar_mime: None,
+            avatar_bytes: self.avatar_bytes.clone(),
+            avatar_mime: self.avatar_mime.clone(),
             visibility,
             e2ee_enabled,
             initial_invitees: parsed_invitees,
+        }
+    }
+
+    fn reset_inputs(&mut self, cx: &mut Cx) {
+        self.view.text_input(cx, ids!(name_input)).set_text(cx, "");
+        self.view.text_input(cx, ids!(topic_input)).set_text(cx, "");
+        self.view.text_input(cx, ids!(invitees_input)).set_text(cx, "");
+        self.view.radio_button(cx, ids!(visibility_public)).set_active(cx, false, Animate::No);
+        self.view.radio_button(cx, ids!(visibility_private)).set_active(cx, true, Animate::No);
+        self.view.check_box(cx, ids!(e2ee_toggle)).set_active(cx, false, Animate::No);
+        self.avatar_bytes = None;
+        self.avatar_mime = None;
+        self.view.image(cx, ids!(avatar_preview_image)).set_visible(cx, false);
+        let caption = self.view.label(cx, ids!(avatar_preview_caption));
+        caption.set_visible(cx, true);
+        caption.set_text(cx, "No image");
+        self.sync_visibility_card_highlight(cx);
+    }
+
+    fn handle_avatar_upload(&mut self, cx: &mut Cx) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Image", &["png", "jpg", "jpeg", "gif"])
+            .pick_file()
+        else {
+            return;
+        };
+
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                enqueue_popup_notification(
+                    format!("Could not read selected file: {e}"),
+                    PopupKind::Error,
+                    None,
+                );
+                return;
+            }
+        };
+
+        const MAX_AVATAR_BYTES: usize = 4 * 1024 * 1024;
+        if bytes.len() > MAX_AVATAR_BYTES {
+            enqueue_popup_notification(
+                format!(
+                    "Avatar is too large ({} bytes, max {} bytes).",
+                    bytes.len(),
+                    MAX_AVATAR_BYTES,
+                ),
+                PopupKind::Error,
+                None,
+            );
+            return;
+        }
+
+        let mime = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| match e.to_ascii_lowercase().as_str() {
+                "png" => "image/png".to_string(),
+                "jpg" | "jpeg" => "image/jpeg".to_string(),
+                "gif" => "image/gif".to_string(),
+                other => format!("image/{other}"),
+            });
+
+        let preview = self.view.image(cx, ids!(avatar_preview_image));
+        let caption = self.view.label(cx, ids!(avatar_preview_caption));
+        match crate::utils::load_png_or_jpg(&preview, cx, &bytes) {
+            Ok(()) => {
+                preview.set_visible(cx, true);
+                caption.set_visible(cx, false);
+            }
+            Err(_) => {
+                preview.set_visible(cx, false);
+                caption.set_visible(cx, true);
+                caption.set_text(cx, "Image ready");
+            }
+        }
+
+        self.avatar_bytes = Some(bytes);
+        self.avatar_mime = mime;
+        self.redraw(cx);
+    }
+
+    fn sync_visibility_card_highlight(&mut self, cx: &mut Cx) {
+        let private_active = self.view.radio_button(cx, ids!(visibility_private)).active(cx);
+        let mut public_card = self.view.view(cx, ids!(visibility_public_card));
+        let mut private_card = self.view.view(cx, ids!(visibility_private_card));
+        if private_active {
+            script_apply_eval!(cx, public_card, {
+                draw_bg.border_color: mod.widgets.COLOR_SECONDARY_DARKER,
+                draw_bg.border_size: 1.0,
+            });
+            script_apply_eval!(cx, private_card, {
+                draw_bg.border_color: mod.widgets.COLOR_FG_ACCEPT_GREEN,
+                draw_bg.border_size: 2.0,
+            });
+        } else {
+            script_apply_eval!(cx, public_card, {
+                draw_bg.border_color: mod.widgets.COLOR_FG_ACCEPT_GREEN,
+                draw_bg.border_size: 2.0,
+            });
+            script_apply_eval!(cx, private_card, {
+                draw_bg.border_color: mod.widgets.COLOR_SECONDARY_DARKER,
+                draw_bg.border_size: 1.0,
+            });
         }
     }
 }

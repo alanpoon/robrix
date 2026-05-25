@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "ab_glyph_rasterizer"
 version = "0.1.8"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "accessory"
@@ -616,7 +616,7 @@ dependencies = [
 [[package]]
 name = "bitflags"
 version = "2.10.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "bitmaps"
@@ -740,7 +740,7 @@ checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
 [[package]]
 name = "bytemuck"
 version = "1.25.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "byteorder"
@@ -751,7 +751,7 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 [[package]]
 name = "byteorder"
 version = "1.5.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "bytes"
@@ -1217,6 +1217,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctrlc"
+version = "3.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73736a89c4aff73035ba2ed2e565061954da00d4970fc9ac25dcc85a2a20d790"
+dependencies = [
+ "dispatch2",
+ "nix",
+ "windows-sys 0.61.1",
+]
+
+[[package]]
 name = "curve25519-dalek"
 version = "4.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1471,7 +1482,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -1481,6 +1492,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89a09f22a6c6069a18470eb92d2298acf25463f14256d24778e1230d789a2aec"
 dependencies = [
  "bitflags 2.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "block2",
+ "libc",
  "objc2",
 ]
 
@@ -1493,6 +1506,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.106",
+]
+
+[[package]]
+name = "dlib"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
+dependencies = [
+ "libloading",
 ]
 
 [[package]]
@@ -1617,7 +1639,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -1954,9 +1976,9 @@ dependencies = [
 [[package]]
 name = "fxhash"
 version = "0.2.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
- "byteorder 1.5.0 (git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements)",
+ "byteorder 1.5.0 (git+https://github.com/makepad/makepad?branch=dev)",
 ]
 
 [[package]]
@@ -2818,7 +2840,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.53.4",
 ]
 
 [[package]]
@@ -2971,7 +2993,7 @@ dependencies = [
 [[package]]
 name = "makepad-apple-sys"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-objc-sys",
 ]
@@ -2979,12 +3001,12 @@ dependencies = [
 [[package]]
 name = "makepad-byteorder-lite"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "makepad-code-editor"
 version = "2.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-widgets",
 ]
@@ -2992,7 +3014,7 @@ dependencies = [
 [[package]]
 name = "makepad-derive-wasm-bridge"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-micro-proc-macro",
 ]
@@ -3000,7 +3022,7 @@ dependencies = [
 [[package]]
 name = "makepad-derive-widget"
 version = "2.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-live-id",
  "makepad-micro-proc-macro",
@@ -3009,10 +3031,11 @@ dependencies = [
 [[package]]
 name = "makepad-draw"
 version = "2.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "ab_glyph_rasterizer",
  "fxhash",
+ "makepad-gif",
  "makepad-live-id",
  "makepad-math",
  "makepad-platform",
@@ -3023,15 +3046,15 @@ dependencies = [
  "rustybuzz",
  "sdfer",
  "serde",
- "unicode-bidi 0.3.18 (git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements)",
+ "unicode-bidi 0.3.18 (git+https://github.com/makepad/makepad?branch=dev)",
  "unicode-linebreak",
- "unicode-segmentation 1.12.0 (git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements)",
+ "unicode-segmentation 1.12.0 (git+https://github.com/makepad/makepad?branch=dev)",
 ]
 
 [[package]]
 name = "makepad-error-log"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-micro-serde",
 ]
@@ -3039,22 +3062,30 @@ dependencies = [
 [[package]]
 name = "makepad-filesystem-watcher"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "makepad-futures"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "makepad-futures-legacy"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
+
+[[package]]
+name = "makepad-gif"
+version = "0.1.0"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
+dependencies = [
+ "weezl",
+]
 
 [[package]]
 name = "makepad-html"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-live-id",
 ]
@@ -3068,7 +3099,7 @@ checksum = "9775cbec5fa0647500c3e5de7c850280a88335d1d2d770e5aa2332b801ba7064"
 [[package]]
 name = "makepad-latex-math"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "ttf-parser",
 ]
@@ -3076,7 +3107,7 @@ dependencies = [
 [[package]]
 name = "makepad-live-id"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-live-id-macros",
  "serde",
@@ -3085,7 +3116,7 @@ dependencies = [
 [[package]]
 name = "makepad-live-id-macros"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-micro-proc-macro",
 ]
@@ -3093,7 +3124,7 @@ dependencies = [
 [[package]]
 name = "makepad-live-reload-core"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-filesystem-watcher",
 ]
@@ -3101,7 +3132,7 @@ dependencies = [
 [[package]]
 name = "makepad-math"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-micro-serde",
 ]
@@ -3109,12 +3140,12 @@ dependencies = [
 [[package]]
 name = "makepad-micro-proc-macro"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "makepad-micro-serde"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-live-id",
  "makepad-micro-serde-derive",
@@ -3123,7 +3154,7 @@ dependencies = [
 [[package]]
 name = "makepad-micro-serde-derive"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-micro-proc-macro",
 ]
@@ -3131,7 +3162,7 @@ dependencies = [
 [[package]]
 name = "makepad-network"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-apple-sys",
  "makepad-error-log",
@@ -3145,15 +3176,16 @@ dependencies = [
 [[package]]
 name = "makepad-objc-sys"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "makepad-platform"
 version = "2.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "ash",
- "bitflags 2.10.0 (git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements)",
+ "bitflags 2.10.0 (git+https://github.com/makepad/makepad?branch=dev)",
+ "ctrlc",
  "hilog-sys",
  "makepad-android-state",
  "makepad-apple-sys",
@@ -3167,16 +3199,17 @@ dependencies = [
  "makepad-script-std",
  "makepad-shared-bytes",
  "makepad-studio-protocol",
+ "makepad-tsdf",
  "makepad-wasm-bridge",
  "makepad-zune-png",
  "naga",
  "napi-derive-ohos",
  "napi-ohos",
  "ohos-sys",
- "smallvec 1.15.1 (git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements)",
- "wayland-client",
+ "smallvec 1.15.1 (git+https://github.com/makepad/makepad?branch=dev)",
+ "wayland-client 0.31.12",
  "wayland-egl",
- "wayland-protocols",
+ "wayland-protocols 0.32.10",
  "windows 0.62.2",
  "windows-core 0.62.2",
  "windows-targets 0.52.6",
@@ -3185,12 +3218,12 @@ dependencies = [
 [[package]]
 name = "makepad-regex"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "makepad-script"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-error-log",
  "makepad-html",
@@ -3198,13 +3231,13 @@ dependencies = [
  "makepad-math",
  "makepad-regex",
  "makepad-script-derive",
- "smallvec 1.15.1 (git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements)",
+ "smallvec 1.15.1 (git+https://github.com/makepad/makepad?branch=dev)",
 ]
 
 [[package]]
 name = "makepad-script-derive"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-micro-proc-macro",
 ]
@@ -3212,7 +3245,7 @@ dependencies = [
 [[package]]
 name = "makepad-script-std"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-network",
  "makepad-script",
@@ -3221,14 +3254,14 @@ dependencies = [
 [[package]]
 name = "makepad-shared-bytes"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "makepad-studio-protocol"
 version = "0.1.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
- "bitflags 2.10.0 (git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements)",
+ "bitflags 2.10.0 (git+https://github.com/makepad/makepad?branch=dev)",
  "makepad-error-log",
  "makepad-live-id",
  "makepad-micro-serde",
@@ -3238,16 +3271,25 @@ dependencies = [
 [[package]]
 name = "makepad-svg"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-html",
  "makepad-live-id",
 ]
 
 [[package]]
+name = "makepad-tsdf"
+version = "0.1.0"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
+dependencies = [
+ "makepad-math",
+ "makepad-micro-serde",
+]
+
+[[package]]
 name = "makepad-wasm-bridge"
 version = "1.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-derive-wasm-bridge",
  "makepad-live-id",
@@ -3256,7 +3298,7 @@ dependencies = [
 [[package]]
 name = "makepad-webp"
 version = "0.2.4"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-byteorder-lite",
 ]
@@ -3264,7 +3306,7 @@ dependencies = [
 [[package]]
 name = "makepad-widgets"
 version = "2.0.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-derive-widget",
  "makepad-draw",
@@ -3273,18 +3315,18 @@ dependencies = [
  "pulldown-cmark 0.12.2",
  "serde",
  "ttf-parser",
- "unicode-segmentation 1.12.0 (git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements)",
+ "unicode-segmentation 1.12.0 (git+https://github.com/makepad/makepad?branch=dev)",
 ]
 
 [[package]]
 name = "makepad-zune-core"
 version = "0.5.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "makepad-zune-inflate"
 version = "0.2.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "simd-adler32",
 ]
@@ -3292,7 +3334,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-jpeg"
 version = "0.5.12"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-zune-core",
 ]
@@ -3300,7 +3342,7 @@ dependencies = [
 [[package]]
 name = "makepad-zune-png"
 version = "0.5.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "makepad-zune-core",
  "makepad-zune-inflate",
@@ -3696,7 +3738,7 @@ checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 [[package]]
 name = "memchr"
 version = "2.7.6"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "mime"
@@ -3851,6 +3893,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
+name = "nix"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
+dependencies = [
+ "bitflags 2.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3967,6 +4021,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6f29f568bec459b0ddff777cec4fe3fd8666d82d5a40ebd0ff7e66134f89bcc"
 dependencies = [
  "bitflags 2.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "block2",
  "objc2",
  "objc2-foundation",
 ]
@@ -4292,6 +4347,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
+
+[[package]]
 name = "poly1305"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4428,10 +4489,10 @@ dependencies = [
 [[package]]
 name = "pulldown-cmark"
 version = "0.12.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
- "bitflags 2.10.0 (git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements)",
- "memchr 2.7.6 (git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements)",
+ "bitflags 2.10.0 (git+https://github.com/makepad/makepad?branch=dev)",
+ "memchr 2.7.6 (git+https://github.com/makepad/makepad?branch=dev)",
  "unicase 2.9.0",
 ]
 
@@ -4452,6 +4513,15 @@ name = "pulldown-cmark-escape"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
+
+[[package]]
+name = "quick-xml"
+version = "0.39.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdcc8dd4e2f670d309a5f0e83fe36dfdc05af317008fea29144da1a2ac858e5e"
+dependencies = [
+ "memchr 2.7.6 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
 [[package]]
 name = "quinn"
@@ -4599,6 +4669,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f93e7e49bb0bf967717f7bd674458b3d6b0c5f48ec7e3038166026a69fc22223"
 
 [[package]]
+name = "raw-window-handle"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
+
+[[package]]
 name = "readlock"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4741,6 +4817,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "rfd"
+version = "0.17.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20dafead71c16a34e1ff357ddefc8afc11e7d51d6d2b9fbd07eaa48e3e540220"
+dependencies = [
+ "block2",
+ "dispatch2",
+ "js-sys",
+ "libc",
+ "log",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-foundation",
+ "percent-encoding",
+ "pollster",
+ "raw-window-handle",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wayland-backend 0.3.15",
+ "wayland-client 0.31.14",
+ "wayland-protocols 0.32.12",
+ "web-sys",
+ "windows-sys 0.61.1",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4870,6 +4973,7 @@ dependencies = [
  "rand 0.8.5",
  "rangemap",
  "reqwest",
+ "rfd",
  "robius-directories",
  "robius-location",
  "robius-open",
@@ -5120,7 +5224,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -5191,12 +5295,12 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 [[package]]
 name = "rustybuzz"
 version = "0.18.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
- "bitflags 2.10.0 (git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements)",
- "bytemuck 1.25.0 (git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements)",
+ "bitflags 2.10.0 (git+https://github.com/makepad/makepad?branch=dev)",
+ "bytemuck 1.25.0 (git+https://github.com/makepad/makepad?branch=dev)",
  "makepad-error-log",
- "smallvec 1.15.1 (git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements)",
+ "smallvec 1.15.1 (git+https://github.com/makepad/makepad?branch=dev)",
  "ttf-parser",
  "unicode-bidi-mirroring",
  "unicode-ccc",
@@ -5291,7 +5395,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sdfer"
 version = "0.2.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "sealed"
@@ -5590,7 +5694,7 @@ dependencies = [
 [[package]]
 name = "simd-adler32"
 version = "0.3.8"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "siphasher"
@@ -5616,7 +5720,7 @@ dependencies = [
 [[package]]
 name = "smallvec"
 version = "1.15.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "socket2"
@@ -6503,7 +6607,7 @@ dependencies = [
 [[package]]
 name = "ttf-parser"
 version = "0.24.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "tungstenite"
@@ -6564,7 +6668,7 @@ checksum = "75b844d17643ee918803943289730bec8aac480150456169e647ed0b576ba539"
 [[package]]
 name = "unicase"
 version = "2.9.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "unicode-bidi"
@@ -6575,17 +6679,17 @@ checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
 [[package]]
 name = "unicode-bidi"
 version = "0.3.18"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "unicode-bidi-mirroring"
 version = "0.3.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "unicode-ccc"
 version = "0.3.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "unicode-ident"
@@ -6596,7 +6700,7 @@ checksum = "f63a545481291138910575129486daeaf8ac54aee4387fe7906919f7830c7d9d"
 [[package]]
 name = "unicode-linebreak"
 version = "0.1.5"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "unicode-normalization"
@@ -6616,12 +6720,12 @@ checksum = "e70f2a8b45122e719eb623c01822704c4e0907e7e426a05927e1a1cfff5b75d0"
 [[package]]
 name = "unicode-properties"
 version = "0.1.4"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "unicode-script"
 version = "0.5.8"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "unicode-segmentation"
@@ -6632,7 +6736,7 @@ checksum = "f6ccf251212114b54433ec949fd6a7841275f9ada20dddd2f29e9ceea4501493"
 [[package]]
 name = "unicode-segmentation"
 version = "1.12.0"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "unicode-width"
@@ -6912,49 +7016,109 @@ dependencies = [
 [[package]]
 name = "wayland-backend"
 version = "0.3.12"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "downcast-rs",
  "libc",
  "scoped-tls",
  "smallvec 1.15.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "wayland-sys",
+ "wayland-sys 0.31.8",
+]
+
+[[package]]
+name = "wayland-backend"
+version = "0.3.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2857dd20b54e916ec7253b3d6b4d5c4d7d4ca2c33c2e11c6c76a99bd8744755d"
+dependencies = [
+ "cc",
+ "downcast-rs",
+ "rustix",
+ "scoped-tls",
+ "smallvec 1.15.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wayland-sys 0.31.11",
 ]
 
 [[package]]
 name = "wayland-client"
 version = "0.31.12"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "bitflags 2.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc",
- "wayland-backend",
+ "wayland-backend 0.3.12",
+]
+
+[[package]]
+name = "wayland-client"
+version = "0.31.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "645c7c96bb74690c3189b5c9cb4ca1627062bb23693a4fad9d8c3de958260144"
+dependencies = [
+ "bitflags 2.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rustix",
+ "wayland-backend 0.3.15",
+ "wayland-scanner",
 ]
 
 [[package]]
 name = "wayland-egl"
 version = "0.32.9"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
- "wayland-backend",
- "wayland-sys",
+ "wayland-backend 0.3.12",
+ "wayland-sys 0.31.8",
 ]
 
 [[package]]
 name = "wayland-protocols"
 version = "0.32.10"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "bitflags 2.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "wayland-backend",
- "wayland-client",
+ "wayland-backend 0.3.12",
+ "wayland-client 0.31.12",
+]
+
+[[package]]
+name = "wayland-protocols"
+version = "0.32.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "563a85523cade2429938e790815fd7319062103b9f4a2dc806e9b53b95982d8f"
+dependencies = [
+ "bitflags 2.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wayland-backend 0.3.15",
+ "wayland-client 0.31.14",
+ "wayland-scanner",
+]
+
+[[package]]
+name = "wayland-scanner"
+version = "0.31.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c324a910fd86ebdc364a3e61ec1f11737d3b1d6c273c0239ee8ff4bc0d24b4a"
+dependencies = [
+ "proc-macro2",
+ "quick-xml",
+ "quote",
 ]
 
 [[package]]
 name = "wayland-sys"
 version = "0.31.8"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
+ "log",
+ "pkg-config",
+]
+
+[[package]]
+name = "wayland-sys"
+version = "0.31.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8eab23fefc9e41f8e841df4a9c707e8a8c4ed26e944ef69297184de2785e3be"
+dependencies = [
+ "dlib",
  "log",
  "pkg-config",
 ]
@@ -7000,6 +7164,11 @@ checksum = "7e8983c3ab33d6fb807cfcdad2491c4ea8cbc8ed839181c7dfd9c67c83e261b2"
 dependencies = [
  "rustls-pki-types",
 ]
+
+[[package]]
+name = "weezl"
+version = "0.1.12"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "whoami"
@@ -7052,7 +7221,7 @@ dependencies = [
 [[package]]
 name = "windows"
 version = "0.62.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "windows-collections 0.3.2",
  "windows-core 0.62.2",
@@ -7071,7 +7240,7 @@ dependencies = [
 [[package]]
 name = "windows-collections"
 version = "0.3.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "windows-core 0.62.2",
 ]
@@ -7104,7 +7273,7 @@ dependencies = [
 [[package]]
 name = "windows-core"
 version = "0.62.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "windows-link 0.2.1",
  "windows-result 0.4.1",
@@ -7125,7 +7294,7 @@ dependencies = [
 [[package]]
 name = "windows-future"
 version = "0.3.2"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "windows-core 0.62.2",
 ]
@@ -7189,7 +7358,7 @@ checksum = "45e46c0661abb7180e7b9c281db115305d49ca1709ab8242adf09666d2173c65"
 [[package]]
 name = "windows-link"
 version = "0.2.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 
 [[package]]
 name = "windows-numerics"
@@ -7233,7 +7402,7 @@ dependencies = [
 [[package]]
 name = "windows-result"
 version = "0.4.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "windows-link 0.2.1",
 ]
@@ -7250,7 +7419,7 @@ dependencies = [
 [[package]]
 name = "windows-strings"
 version = "0.5.1"
-source = "git+https://github.com/kevinaboos/makepad?branch=stack_nav_improvements#461b05134a501b8e67f431b2706fb200d4bcf68a"
+source = "git+https://github.com/makepad/makepad?branch=dev#12dcfc1e7700d99c98801dfab06b0d29c337bf3a"
 dependencies = [
  "windows-link 0.2.1",
 ]

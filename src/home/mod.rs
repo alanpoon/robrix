@@ -37,8 +37,8 @@ pub fn script_mod(vm: &mut ScriptVm) {
     search_messages::script_mod(vm);
     loading_pane::script_mod(vm);
     location_preview::script_mod(vm);
-    add_room::script_mod(vm);
     create_room::script_mod(vm);
+    add_room::script_mod(vm);
     create_bot_modal::script_mod(vm);
     delete_bot_modal::script_mod(vm);
     space_lobby::script_mod(vm);
