@@ -61,14 +61,14 @@ script_mod! {
                 align: Align { x: 0.5, y: 0.5 }
                 flow: Overlay,
 
-                green_rounded_label := RoundedView {
+                green_rounded_label := View {
                     width: Fill,
                     height: Fill,
                     show_bg: true,
                     draw_bg +: {
                         color: instance(COLOR_UNREAD_BADGE_MESSAGES)
                         border_radius: uniform(4.0)
-                        // Adjust this border_size to larger value to make oval smaller 
+                        // Adjust this border_size to larger value to make oval smaller
                         border_size: uniform(2.0)
 
                         pixel: fn() {
@@ -87,6 +87,7 @@ script_mod! {
                 }
                 // Label that displays the unread message count
                 unread_messages_count := Label {
+                    padding: 0,
                     width: Fit,
                     height: Fit,
                     flow: Right, // do not wrap
@@ -173,7 +174,9 @@ impl JumpToBottomButton {
                 self.label(cx, ids!(unread_messages_count)).set_text(cx, "");
             }
             UnreadMessageCount::Known(0) => {
-                self.visible = false;
+                // Only hide the badge, not the entire button.
+                // The button's visibility is controlled by `update_visibility()`
+                // based on whether the portal list is at the end.
                 self.view(cx, ids!(unread_message_badge)).set_visible(cx, false);
                 self.label(cx, ids!(unread_messages_count)).set_text(cx, "");
             }

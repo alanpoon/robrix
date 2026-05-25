@@ -31,12 +31,12 @@
 use makepad_widgets::*;
 use serde::{Deserialize, Serialize};
 use crate::{
-    avatar_cache::{self, AvatarCacheEntry}, login::login_screen::LoginAction, logout::logout_confirm_modal::LogoutAction, profile::{
+    app::AppState, avatar_cache::{self, AvatarCacheEntry}, i18n::{AppLanguage, tr_fmt}, login::login_screen::LoginAction, logout::logout_confirm_modal::LogoutAction, profile::{
         user_profile::UserProfile,
         user_profile_cache::{self, UserProfileUpdate},
-    }, shared::{
+    }, home::spaces_bar::SpacesBarWidgetExt, shared::{
         avatar::{AvatarState, AvatarWidgetExt}, styles::*, verification_badge::VerificationBadgeWidgetExt
-    }, sliding_sync::{current_user_id, AccountDataAction}, utils::{self, RoomNameId}
+    }, settings::app_preferences::{effective_is_desktop, AppPreferencesGlobal, AppPreferencesAction, ViewModeOverride}, sliding_sync::{current_user_id, AccountDataAction, AccountSwitchAction}, utils::{self, RoomNameId}
 };
 
 script_mod! {
@@ -49,8 +49,8 @@ script_mod! {
     mod.widgets.NavigationTabButton = RadioButtonTab {
         width: Fill,
         height: (NAVIGATION_TAB_BAR_SIZE - 5),
-        padding: 5,
-        margin: 3,
+        padding: (SPACE_XS),
+        margin: (SPACE_XS),
         align: Align{x: 0.5, y: 0.5}
         flow: Down,
         text: "",
@@ -72,7 +72,7 @@ script_mod! {
             color_focus: (COLOR_NAVIGATION_TAB_BG_ACTIVE)
 
             border_size: 0.0
-            border_radius: 4.0
+            border_radius: (RADIUS_MD)
             border_color: #0000
             border_color_hover: #0000
             border_color_down: #0000
@@ -147,27 +147,23 @@ script_mod! {
         }
     }
 
-    mod.widgets.SettingsButton = mod.widgets.NavigationTabButton {
-        draw_icon +: { svg: (ICON_SETTINGS) }
-    }
-
     mod.widgets.AddRoomButton = mod.widgets.NavigationTabButton {
         draw_icon +: { svg: (ICON_ADD) }
     }
 
-    mod.widgets.Separator = LineH { margin: 8 }
+    mod.widgets.Separator = LineH { margin: (SPACE_SM) }
 
     mod.widgets.NavigationTabBar = #(NavigationTabBar::register_widget(vm)) {
         Desktop := RoundedView {
             flow: Down,
             align: Align{x: 0.5}
-            padding: Inset{top: 40., bottom: 8}
+            padding: Inset{top: (SPACE_SM), bottom: (SPACE_SM), left: (SPACE_XS), right: (SPACE_XS)}
             width: (NAVIGATION_TAB_BAR_SIZE), 
             height: Fill
 
             draw_bg +: {
                 color: (COLOR_SECONDARY)
-                border_radius: 4.0
+                border_radius: (RADIUS_LG)
             }
 
             CachedWidget {
@@ -186,11 +182,6 @@ script_mod! {
                 root_spaces_bar := mod.widgets.SpacesBar {}
             }
 
-            mod.widgets.Separator {}
-
-            CachedWidget {
-                settings_button := mod.widgets.SettingsButton {}
-            }
         }
 
         Mobile := RoundedView {
@@ -201,7 +192,7 @@ script_mod! {
 
             draw_bg +: {
                 color: (COLOR_SECONDARY)
-                border_radius: 4.0
+                border_radius: 0.0
             }
 
             CachedWidget {
@@ -213,9 +204,6 @@ script_mod! {
 
             toggle_spaces_bar_button := mod.widgets.ToggleSpacesBarButton {}
 
-            CachedWidget {
-                settings_button := mod.widgets.SettingsButton {}
-            }
             CachedWidget {
                 profile_icon := mod.widgets.ProfileIcon {}
             }
@@ -230,6 +218,14 @@ script_mod! {
 pub struct ProfileIcon {
     #[deref] view: View,
     #[rust] own_profile: Option<UserProfile>,
+    #[rust] app_language: AppLanguage,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum ProfileIconAction {
+    Clicked,
+    #[default]
+    None,
 }
 
 impl ScriptHook for ProfileIcon {
@@ -244,6 +240,11 @@ impl ScriptHook for ProfileIcon {
 
 impl Widget for ProfileIcon {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        let app_language = scope.data.get::<AppState>()
+            .map(|app_state| app_state.app_language)
+            .unwrap_or_default();
+        self.app_language = app_language;
+
         if self.own_profile.is_none() {
             self.own_profile = get_own_profile(cx);
         }
@@ -285,6 +286,13 @@ impl Widget for ProfileIcon {
 
                 if let Some(LogoutAction::ClearAppState { .. }) = action.downcast_ref() {
                     self.own_profile = None;
+                    self.view.redraw(cx);
+                    continue;
+                }
+
+                // Handle account switch - refresh profile with new account's data
+                if let Some(AccountSwitchAction::Switched(_new_user_id)) = action.downcast_ref() {
+                    self.own_profile = get_own_profile(cx);
                     self.view.redraw(cx);
                     continue;
                 }
@@ -338,16 +346,24 @@ impl Widget for ProfileIcon {
 
         let area = self.view.area();
         match event.hits(cx, area) {
+            Hit::FingerUp(fe) if fe.is_over && fe.is_primary_hit() && fe.was_tap() => {
+                cx.widget_action(self.widget_uid(), ProfileIconAction::Clicked);
+            }
             Hit::FingerLongPress(_) | Hit::FingerHoverIn(_) => {
                 let (verification_str, bg_color) = self.view
                     .verification_badge(cx, ids!(verification_badge))
-                    .tooltip_content();
+                    .tooltip_content(self.app_language);
                 let text = self.own_profile.as_ref().map_or_else(
-                    || format!("Not logged in.\n\n{}", verification_str),
-                    |p| format!("Logged in as \"{}\".\n\n{}", p.displayable_name(), verification_str)
+                    || tr_fmt(self.app_language, "navigation_tab_bar.profile.tooltip.not_logged_in", &[
+                        ("verification", verification_str.as_str()),
+                    ]),
+                    |p| tr_fmt(self.app_language, "navigation_tab_bar.profile.tooltip.logged_in_as", &[
+                        ("display_name", p.displayable_name()),
+                        ("verification", verification_str.as_str()),
+                    ]),
                 );
                 let mut options = CalloutTooltipOptions {
-                    position: if cx.display_context.is_desktop() { TooltipPosition::Right} else { TooltipPosition::Top},
+                    position: if effective_is_desktop(cx) { TooltipPosition::Right} else { TooltipPosition::Top},
                     ..Default::default()
                 };
                 if let Some(c) = bg_color {
@@ -415,6 +431,7 @@ pub struct NavigationTabBar {
     #[deref] view: AdaptiveView,
 
     #[rust] is_spaces_bar_shown: bool,
+    #[rust] applied_view_mode: ViewModeOverride,
 }
 
 impl ScriptHook for NavigationTabBar {
@@ -425,7 +442,17 @@ impl ScriptHook for NavigationTabBar {
             if let Some(mut rb) = self.view.radio_button(cx, ids!(home_button)).borrow_mut() {
                 rb.animator_play(cx, ids!(active.on));
             }
+            cx.set_global(self.view.spaces_bar(cx, ids!(root_spaces_bar)));
+            let mode = cx.global::<AppPreferencesGlobal>().0.view_mode;
+            self.apply_view_mode(mode);
         });
+    }
+}
+
+impl NavigationTabBar {
+    fn apply_view_mode(&mut self, mode: ViewModeOverride) {
+        self.view.set_variant_selector(mode.variant_selector());
+        self.applied_view_mode = mode;
     }
 }
 
@@ -438,12 +465,10 @@ impl Widget for NavigationTabBar {
             let radio_button_set = self.view.radio_button_set(cx, ids_array!(
                 home_button,
                 add_room_button,
-                settings_button,
             ));
             match radio_button_set.selected(cx, actions) {
                 Some(0) => cx.action(NavigationBarAction::GoToHome),
                 Some(1) => cx.action(NavigationBarAction::GoToAddRoom),
-                Some(2) => cx.action(NavigationBarAction::OpenSettings),
                 _ => { }
             }
 
@@ -459,7 +484,13 @@ impl Widget for NavigationTabBar {
                     match tab {
                         SelectedTab::Home     => self.view.radio_button(cx, ids!(home_button)).select(cx, scope),
                         SelectedTab::AddRoom  => self.view.radio_button(cx, ids!(add_room_button)).select(cx, scope),
-                        SelectedTab::Settings => self.view.radio_button(cx, ids!(settings_button)).select(cx, scope),
+                        SelectedTab::Settings => {
+                            for rb in radio_button_set.iter() {
+                                if let Some(mut rb_inner) = rb.borrow_mut() {
+                                    rb_inner.animator_play(cx, ids!(active.off));
+                                }
+                            }
+                        }
                         SelectedTab::Space { .. } => {
                             for rb in radio_button_set.iter() {
                                 if let Some(mut rb_inner) = rb.borrow_mut() {
@@ -467,6 +498,24 @@ impl Widget for NavigationTabBar {
                                 }
                             }
                         }
+                    }
+                    continue;
+                }
+
+                if let ProfileIconAction::Clicked = action.as_widget_action().cast() {
+                    for rb in radio_button_set.iter() {
+                        if let Some(mut rb_inner) = rb.borrow_mut() {
+                            rb_inner.animator_play(cx, ids!(active.off));
+                        }
+                    }
+                    cx.action(NavigationBarAction::OpenSettings);
+                    continue;
+                }
+
+                if let Some(AppPreferencesAction::ViewModeChanged(new_mode)) = action.downcast_ref() {
+                    if *new_mode != self.applied_view_mode {
+                        self.apply_view_mode(*new_mode);
+                        self.view.redraw(cx);
                     }
                     continue;
                 }

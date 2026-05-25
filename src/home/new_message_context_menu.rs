@@ -3,12 +3,12 @@
 
 use bitflags::bitflags;
 use makepad_widgets::*;
-use matrix_sdk::ruma::OwnedEventId;
+use matrix_sdk::ruma::{OwnedEventId, events::room::message::MessageType};
 use matrix_sdk_ui::timeline::{EventTimelineItem, MsgLikeContent, TimelineEventItemId};
 
-use crate::sliding_sync::UserPowerLevels;
+use crate::{i18n::{AppLanguage, tr_key}, sliding_sync::UserPowerLevels};
 
-use super::room_screen::MessageAction;
+use super::{ContextMenuOpenGesture, consume_context_menu_opening_finger_up, room_screen::MessageAction};
 
 const BUTTON_HEIGHT: f64 = 35.0; // KEEP IN SYNC WITH BUTTON_HEIGHT BELOW
 const MENU_WIDTH: f64 = 215.0;   // KEEP IN SYNC WITH MENU_WIDTH BELOW
@@ -155,6 +155,11 @@ script_mod! {
                 text: "Copy Link to Message"
             }
 
+            forward_message_button := mod.widgets.NewMessageContextMenuButton {
+                draw_icon +: { svg: (ICON_SEND) }
+                text: "Forward Message"
+            }
+
             view_source_button := mod.widgets.NewMessageContextMenuButton {
                 draw_icon +: { svg: (ICON_VIEW_SOURCE) }
                 text: "View Source"
@@ -231,13 +236,15 @@ bitflags! {
         const CanDelete = 1 << 5;
         /// Whether this message contains HTML content that the user can copy.
         const HasHtml = 1 << 6;
+        /// Whether this message can be forwarded to another room.
+        const CanForward = 1 << 7;
     }
 }
 impl MessageAbilities {
     pub fn from_user_power_and_event(
         user_power_levels: &UserPowerLevels,
         event_tl_item: &EventTimelineItem,
-        _message: &MsgLikeContent,
+        message: &MsgLikeContent,
         pinned_events: &[OwnedEventId],
         has_html: bool,
     ) -> Self {
@@ -257,9 +264,17 @@ impl MessageAbilities {
         }
         abilities.set(Self::CanReact, user_power_levels.can_send_reaction());
         abilities.set(Self::HasHtml, has_html);
+        abilities.set(Self::CanForward, is_forwardable_message_content(message));
         abilities
     }
 
+}
+
+pub fn is_forwardable_message_content(message: &MsgLikeContent) -> bool {
+    message.as_message().is_some_and(|message| matches!(
+        message.msgtype(),
+        MessageType::Text(..) | MessageType::Notice(..) | MessageType::Emote(..)
+    ))
 }
 
 /// Details about the message that define its context menu content.
@@ -300,6 +315,8 @@ pub struct NewMessageContextMenu {
     #[deref] view: View,
     #[source] source: ScriptObjectRef,
     #[rust] details: Option<MessageDetails>,
+    #[rust] app_language: AppLanguage,
+    #[rust] pending_open_gesture: Option<ContextMenuOpenGesture>,
 }
 
 impl Widget for NewMessageContextMenu {
@@ -308,7 +325,12 @@ impl Widget for NewMessageContextMenu {
             self.visible = false;
         };
 
-        self.view.draw_walk(cx, scope, walk)
+        let step = self.view.draw_walk(cx, scope, walk);
+        if self.visible {
+            let main_content_area = self.view(cx, ids!(main_content)).area();
+            cx.block_scrolling_except_within(main_content_area);
+        }
+        step
     }
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
@@ -321,7 +343,6 @@ impl Widget for NewMessageContextMenu {
         // 1. The back navigational gesture/action occurs (e.g., Back on Android),
         // 2. The escape key is pressed if this menu has key focus,
         // 3. The user clicks/touches outside the main_content view area.
-        // 4. The user scrolls anywhere.
         let close_menu = {
             event.back_pressed()
             || match event.hits_with_capture_overload(cx, area, true) {
@@ -336,9 +357,12 @@ impl Widget for NewMessageContextMenu {
                     false
                 }
                 Hit::FingerUp(fue) if fue.is_over => {
-                    !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
+                    if consume_context_menu_opening_finger_up(&mut self.pending_open_gesture, &fue) {
+                        false
+                    } else {
+                        !self.view(cx, ids!(main_content)).area().rect(cx).contains(fue.abs)
+                    }
                 }
-                Hit::FingerScroll(_) => true,
                 _ => false,
             }
         };
@@ -440,6 +464,13 @@ impl WidgetMatchEvent for NewMessageContextMenu {
             );
             close_menu = true;
         }
+        else if self.button(cx, ids!(forward_message_button)).clicked(actions) {
+            cx.widget_action(
+                details.room_screen_widget_uid,
+                MessageAction::Forward(details.clone()),
+            );
+            close_menu = true;
+        }
         else if self.button(cx, ids!(view_source_button)).clicked(actions) {
             cx.widget_action(
                 details.room_screen_widget_uid, 
@@ -485,6 +516,32 @@ impl WidgetMatchEvent for NewMessageContextMenu {
 }
 
 impl NewMessageContextMenu {
+    fn set_app_language(&mut self, cx: &mut Cx, app_language: AppLanguage) {
+        self.app_language = app_language;
+        self.view.button(cx, ids!(react_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.add_reaction"));
+        self.view.text_input(cx, ids!(reaction_input_view.reaction_text_input))
+            .set_empty_text(cx, tr_key(self.app_language, "new_message_context_menu.input.reaction_placeholder").to_string());
+        self.view.button(cx, ids!(reply_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.reply"));
+        self.view.button(cx, ids!(edit_message_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.edit_message"));
+        self.view.button(cx, ids!(copy_text_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.copy_text"));
+        self.view.button(cx, ids!(copy_html_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.copy_text_html"));
+        self.view.button(cx, ids!(copy_link_to_message_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.copy_link"));
+        self.view.button(cx, ids!(forward_message_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.forward_message"));
+        self.view.button(cx, ids!(view_source_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.view_source"));
+        self.view.button(cx, ids!(jump_to_related_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.jump_related"));
+        self.view.button(cx, ids!(delete_button))
+            .set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.delete"));
+    }
+
     /// Returns `true` if this menu is currently being shown.
     pub fn is_currently_shown(&self, _cx: &mut Cx) -> bool {
         self.visible
@@ -494,8 +551,10 @@ impl NewMessageContextMenu {
     ///
     /// Returns the expected (approximate) dimensions of the context menu,
     /// which can be used to proactively reposition it such that it fits on screen.
-    pub fn show(&mut self, cx: &mut Cx, details: MessageDetails) -> DVec2 {
+    pub fn show(&mut self, cx: &mut Cx, details: MessageDetails, app_language: AppLanguage, opening_gesture: ContextMenuOpenGesture) -> DVec2 {
+        self.set_app_language(cx, app_language);
         self.details = Some(details);
+        self.pending_open_gesture = Some(opening_gesture);
         self.visible = true;
         cx.set_key_focus(self.view.area());
 
@@ -519,6 +578,7 @@ impl NewMessageContextMenu {
         let copy_text_button = self.view.button(cx, ids!(copy_text_button));
         let copy_html_button = self.view.button(cx, ids!(copy_html_button));
         let copy_link_button = self.view.button(cx, ids!(copy_link_to_message_button));
+        let forward_message_button = self.view.button(cx, ids!(forward_message_button));
         let view_source_button = self.view.button(cx, ids!(view_source_button));
         let jump_to_related_button = self.view.button(cx, ids!(jump_to_related_button));
         // let report_button = self.view.button(cx, ids!(report_button));
@@ -536,6 +596,7 @@ impl NewMessageContextMenu {
         let show_copy_text = true;
         let show_copy_html = details.abilities.contains(MessageAbilities::HasHtml);
         let show_copy_link = true;
+        let show_forward = details.abilities.contains(MessageAbilities::CanForward);
         let show_view_source = true;
         let show_jump_to_related = details.related_event_id.is_some();
         // let show_report = true;
@@ -550,21 +611,22 @@ impl NewMessageContextMenu {
         self.view.view(cx, ids!(divider_after_react_reply)).set_visible(cx, show_divider_after_react_reply);
         edit_button.set_visible(cx, show_edit);
         if details.thread_root_event_id.is_some() {
-            thread_button.set_text(cx, "Open Thread");
+            thread_button.set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.open_thread"));
         } else {
-            thread_button.set_text(cx, "Reply in Thread");
+            thread_button.set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.reply_in_thread"));
         }
         if details.abilities.contains(MessageAbilities::CanPin) {
-            pin_button.set_text(cx, "Pin Message");
+            pin_button.set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.pin_message"));
             show_pin = true;
         } else if details.abilities.contains(MessageAbilities::CanUnpin) {
-            pin_button.set_text(cx, "Unpin Message");
+            pin_button.set_text(cx, tr_key(self.app_language, "new_message_context_menu.button.unpin_message"));
             show_pin = true;
         } else {
             show_pin = false;
         }
         pin_button.set_visible(cx, show_pin);
         copy_html_button.set_visible(cx, show_copy_html);
+        forward_message_button.set_visible(cx, show_forward);
         jump_to_related_button.set_visible(cx, show_jump_to_related);
         self.view.view(cx, ids!(divider_before_report_delete)).set_visible(cx, show_divider_before_report_delete);
         // report_button.set_visible(cx, show_report);
@@ -579,6 +641,7 @@ impl NewMessageContextMenu {
         copy_text_button.reset_hover(cx);
         copy_html_button.reset_hover(cx);
         copy_link_button.reset_hover(cx);
+        forward_message_button.reset_hover(cx);
         view_source_button.reset_hover(cx);
         jump_to_related_button.reset_hover(cx);
         // report_button.reset_hover(cx);
@@ -599,6 +662,7 @@ impl NewMessageContextMenu {
             + show_copy_text as u8
             + show_copy_html as u8
             + show_copy_link as u8
+            + show_forward as u8
             + show_view_source as u8
             + show_jump_to_related as u8
             // + show_report as u8
@@ -615,7 +679,9 @@ impl NewMessageContextMenu {
     fn close(&mut self, cx: &mut Cx) {
         self.visible = false;
         self.details = None;
+        self.pending_open_gesture = None;
         cx.revert_key_focus();
+        cx.unblock_scrolling();
         self.redraw(cx);
     }
 }
@@ -628,8 +694,8 @@ impl NewMessageContextMenuRef {
     }
 
     /// See [`NewMessageContextMenu::show()`].
-    pub fn show(&self, cx: &mut Cx, details: MessageDetails) -> DVec2 {
+    pub fn show(&self, cx: &mut Cx, details: MessageDetails, app_language: AppLanguage, opening_gesture: ContextMenuOpenGesture) -> DVec2 {
         let Some(mut inner) = self.borrow_mut() else { return DVec2::default()};
-        inner.show(cx, details)
+        inner.show(cx, details, app_language, opening_gesture)
     }
 }
