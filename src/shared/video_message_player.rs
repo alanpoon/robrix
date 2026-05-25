@@ -19,17 +19,41 @@ use matrix_sdk::ruma::{events::room::MediaSource, OwnedMxcUri};
 use matrix_sdk::media::MediaFormat;
 
 pub use crate::event_preview::VideoSummary;
-pub use crate::shared::audio_message_player::DragPhase;
 use crate::{
     event_preview::format_mmss,
     media_cache::{MediaCache, MediaCacheEntry},
-    shared::robrix_video::{
-        cap_blurhash_dimensions, decode_blurhash_to_rgba, placeholder_fallback_color,
-        RobrixVideoRef, RobrixVideoWidgetExt,
-    },
     shared::video_message_player_modal::VideoMessagePlayerModalAction,
     utils,
 };
+
+// Blurhash / placeholder helpers — previously lived in the now-deleted
+// `shared::robrix_video` module. Kept here because this is the only
+// caller after that wrapper widget was inlined into raw `Video`.
+
+pub fn cap_blurhash_dimensions(width: u32, height: u32, max: u32) -> (u32, u32) {
+    if width == 0 || height == 0 {
+        return (0, 0);
+    }
+    if width <= max && height <= max {
+        return (width, height);
+    }
+    let aspect_ratio = width as f32 / height as f32;
+    if height > max && aspect_ratio <= 16.0 / 9.0 {
+        return ((max as f32 * aspect_ratio).floor() as u32, max);
+    }
+    (max, (max as f32 / aspect_ratio).floor() as u32)
+}
+
+pub fn decode_blurhash_to_rgba(blurhash: &str, width: u32, height: u32) -> Option<Vec<u8>> {
+    if blurhash.is_empty() || width == 0 || height == 0 {
+        return None;
+    }
+    blurhash::decode(blurhash, width, height, 1.0).ok()
+}
+
+pub fn placeholder_fallback_color() -> [u8; 4] {
+    [0x22, 0x22, 0x22, 0xFF]
+}
 
 // ============================================================================
 // State types
@@ -58,12 +82,6 @@ impl Default for VideoVolumeState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct VideoUiState {
-    pub maximised: bool,
-    pub card_rect: Option<Rect>,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub enum VolumeAction {
     Mute,
@@ -77,7 +95,6 @@ pub enum VolumeAction {
 
 pub type SharedPlayerState = Arc<Mutex<VideoPlayerState>>;
 pub type SharedVolumeState = Arc<Mutex<VideoVolumeState>>;
-pub type SharedUiState = Arc<Mutex<VideoUiState>>;
 
 // ============================================================================
 // Cross-widget actions
@@ -162,28 +179,6 @@ fn video_extension_from_mime(mime: &str) -> Option<&'static str> {
     }
 }
 
-/// Apply a slider-drag update to `VideoPlayerState`. `Start` and `Move`
-/// pause playback (so the user sees the seeked frame); `End { was_playing }`
-/// resumes only if `was_playing` was true AND we haven't scrubbed to the
-/// very end.
-pub fn apply_video_slider_drag(
-    state: &mut VideoPlayerState,
-    normalized_pos: f64,
-    total_ms: u64,
-    phase: DragPhase,
-) {
-    let normalized_pos = normalized_pos.clamp(0.0, 1.0);
-    state.position_ms = (normalized_pos * total_ms as f64).round() as u64;
-    match phase {
-        DragPhase::Start { .. } | DragPhase::Move => {
-            state.playing = false;
-        }
-        DragPhase::End { was_playing } => {
-            state.playing = was_playing && state.position_ms < total_ms;
-        }
-    }
-}
-
 /// Apply a volume action to `VideoVolumeState`. Mute snapshots the
 /// current level into `restore_level`; Unmute restores it with a 0.05
 /// minimum guard so a previously-silent slider doesn't unmute to zero.
@@ -203,13 +198,6 @@ pub fn apply_volume_action(state: &mut VideoVolumeState, action: VolumeAction) {
             state.muted = state.level == 0.0;
         }
     }
-}
-
-/// Flip `VideoUiState.maximised`. The single mutator for that field —
-/// both the inline maximise button and the modal close path go
-/// through this helper.
-pub fn toggle_maximise(state: &mut VideoUiState) {
-    state.maximised = !state.maximised;
 }
 
 // ============================================================================
@@ -319,9 +307,10 @@ script_mod! {
                 border_radius: 8.0
             }
 
-            robrix_video := RobrixVideo {
+            robrix_video := Video {
                 width: Fill
                 height: Fill
+                show_controls: true
             }
 
             unplayable_overlay := View {
@@ -387,92 +376,6 @@ script_mod! {
                         color_disabled: #x737A85
                     }
                 }
-
-                center_controls := View {
-                    width: Fill
-                    height: Fill
-                    align: Align{x: 0.5, y: 0.5}
-
-                    play_button := Button {
-                        width: 54
-                        height: 54
-                        text: ""
-                        spacing: 0
-                        padding: 0
-                        align: Align{x: 0.5, y: 0.5}
-                        icon_walk: Walk{width: 22, height: 22, margin: Inset{left: 3}}
-                        draw_icon +: {
-                            svg: (mod.widgets.VIDEO_ICON_PLAY)
-                            color: #xffffff
-                        }
-                        draw_bg +: {
-                            border_radius: 7.0
-                            color: #x111827
-                            color_hover: #x374151
-                            color_down: #x111827
-                            color_disabled: #x737A85
-                        }
-                    }
-                    pause_button := Button {
-                        width: 54
-                        height: 54
-                        visible: false
-                        text: ""
-                        spacing: 0
-                        padding: 0
-                        align: Align{x: 0.5, y: 0.5}
-                        icon_walk: Walk{width: 20, height: 22}
-                        draw_icon +: {
-                            svg: (mod.widgets.VIDEO_ICON_PAUSE)
-                            color: #xffffff
-                        }
-                        draw_bg +: {
-                            border_radius: 7.0
-                            color: #x111827
-                            color_hover: #x374151
-                            color_down: #x111827
-                            color_disabled: #x737A85
-                        }
-                    }
-                }
-
-                slider_row := View {
-                    width: Fill
-                    height: Fit
-                    margin: Inset{top: 99999}      // bottom strip
-                    flow: Right
-                    spacing: 8
-                    padding: Inset{top: 4, bottom: 4, left: 8, right: 8}
-                    align: Align{y: 0.5}
-                    show_bg: true
-                    draw_bg +: {
-                        color: #x111827
-                        border_radius: 5.0
-                    }
-                    elapsed_label := Label {
-                        width: 46
-                        height: Fit
-                        text: "00:00"
-                        draw_text +: { color: #xffffff }
-                    }
-                    slider := SliderMinimal {
-                        width: Fill
-                        height: 20
-                        min: 0.0
-                        max: 1.0
-                        step: 0.0
-                        default: 0.0
-                        precision: 2
-                        hover_actions_enabled: false
-                        text_input: TextInput { visible: false, width: 0, height: 0 }
-                    }
-                    total_label := Label {
-                        width: 46
-                        height: Fit
-                        text: "00:00"
-                        draw_text +: { color: #xffffff }
-                    }
-                }
             }
         }
 
@@ -494,6 +397,13 @@ script_mod! {
 pub struct VideoMessagePlayer {
     #[deref]
     view: View,
+
+    /// When false, the maximise button in the top-left of the controls
+    /// overlay is hidden. The embedded `VideoMessagePlayer` inside
+    /// `VideoMessagePlayerModal` sets this to false because it is
+    /// already shown at its maximised size.
+    #[live(true)]
+    show_maximise_button: bool,
 
     // Per-message metadata.
     #[rust]
@@ -530,8 +440,6 @@ pub struct VideoMessagePlayer {
     player_state: SharedPlayerState,
     #[rust]
     volume_state: SharedVolumeState,
-    #[rust]
-    ui_state: SharedUiState,
 
     #[rust]
     slider_drag_was_playing: Option<bool>,
@@ -560,16 +468,6 @@ impl Widget for VideoMessagePlayer {
                 }
             }
 
-            let play_button = self
-                .view
-                .button(cx, ids!(surface.controls.center_controls.play_button));
-            let pause_button = self
-                .view
-                .button(cx, ids!(surface.controls.center_controls.pause_button));
-            if play_button.clicked(actions) || pause_button.clicked(actions) {
-                self.toggle_playback(cx);
-            }
-
             if self
                 .view
                 .button(cx, ids!(surface.controls.mute_button))
@@ -584,42 +482,6 @@ impl Widget for VideoMessagePlayer {
                 .clicked(actions)
             {
                 self.emit_maximise(cx);
-            }
-
-            let slider = self
-                .view
-                .slider(cx, ids!(surface.controls.slider_row.slider));
-            if let Some(action) = actions.find_widget_action(slider.widget_uid()) {
-                let value_now = slider.value().unwrap_or(0.0);
-                let total_ms = self.total_ms();
-                if let Ok(mut state) = self.player_state.lock() {
-                    match action.cast() {
-                        SliderAction::StartSlide => {
-                            let was_playing = state.playing;
-                            self.slider_drag_was_playing = Some(was_playing);
-                            apply_video_slider_drag(
-                                &mut state,
-                                value_now,
-                                total_ms,
-                                DragPhase::Start { was_playing },
-                            );
-                        }
-                        SliderAction::Slide(v) | SliderAction::TextSlide(v) => {
-                            apply_video_slider_drag(&mut state, v, total_ms, DragPhase::Move);
-                        }
-                        SliderAction::EndSlide(v) => {
-                            let was = self.slider_drag_was_playing.take().unwrap_or(false);
-                            apply_video_slider_drag(
-                                &mut state,
-                                v,
-                                total_ms,
-                                DragPhase::End { was_playing: was },
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-                self.sync_controls(cx);
             }
         }
 
@@ -677,30 +539,51 @@ impl VideoMessagePlayer {
         let poster_drawn = self.populate_poster(cx, media_cache);
         let video_drawn = self.is_unplayable() || self.ensure_video_loaded(cx, media_cache);
         if poster_drawn && !video_drawn {
-            if let Some(texture) = self.poster_texture.clone() {
-                self.robrix_video_ref(cx).set_poster_texture(cx, texture);
-            }
+            self.video_ref(cx)
+                .set_thumbnail_texture(cx, self.poster_texture.clone());
         }
         self.sync_controls(cx);
-        println!("poster_drawn {:?} video_drawn {:?}", poster_drawn, video_drawn);
         poster_drawn && video_drawn
+    }
+
+    /// Populate the player from a file path that has already been
+    /// resolved by another player (typically the inline timeline
+    /// player). Used by `VideoMessagePlayerModal`, which receives the
+    /// loaded path through `VideoMessagePlayerModalAction::Open` and
+    /// has no `MediaCache` to look up.
+    pub fn populate_from_loaded_url(
+        &mut self,
+        cx: &mut Cx,
+        summary: VideoSummary,
+        source_url: PathBuf,
+        blurhash: Option<String>,
+    ) {
+        self.summary = Some(summary);
+        self.blurhash = blurhash;
+        self.loaded_source_url = Some(source_url.clone());
+        self.play_enabled = true;
+        self.slider_drag_was_playing = None;
+
+        let video = self.video_ref(cx);
+        video.set_source(VideoDataSource::Filesystem {
+            path: source_url.to_string_lossy().into_owned(),
+        });
+        video.should_dispatch_texture_updates(true);
+
+        self.apply_summary_state(cx);
+        self.sync_controls(cx);
     }
 
     fn apply_summary_state(&mut self, cx: &mut Cx) {
         let unplayable = self.is_unplayable();
         self.view(cx, ids!(surface.unplayable_overlay))
             .set_visible(cx, unplayable);
-        self.view(cx, ids!(surface.controls.slider_row))
-            .set_visible(cx, !unplayable);
-        self.view
-            .button(cx, ids!(surface.controls.center_controls.play_button))
-            .set_enabled(cx, !unplayable);
-        self.view
-            .button(cx, ids!(surface.controls.center_controls.pause_button))
-            .set_enabled(cx, !unplayable);
         self.view
             .button(cx, ids!(surface.controls.mute_button))
             .set_enabled(cx, !unplayable);
+        self.view
+            .button(cx, ids!(surface.controls.maximise_button))
+            .set_visible(cx, self.show_maximise_button);
 
         let total = format_mmss(self.total_secs());
         self.view
@@ -722,7 +605,8 @@ impl VideoMessagePlayer {
                 match crate::shared::image_viewer::get_png_or_jpg_image_buffer(data.to_vec()) {
                     Ok(image_buffer) => {
                         let texture = image_buffer.into_new_texture(cx);
-                        self.robrix_video_ref(cx).set_poster_texture(cx, texture.clone());
+                        self.video_ref(cx)
+                            .set_thumbnail_texture(cx, Some(texture.clone()));
                         self.poster_texture = Some(texture);
                         self.loaded_poster = Some(mxc_uri);
                         true
@@ -768,7 +652,11 @@ impl VideoMessagePlayer {
                     self.set_play_enabled(cx, false);
                     return false;
                 }
-                self.robrix_video_ref(cx).set_source_url(cx, path.clone());
+                let video = self.video_ref(cx);
+                video.set_source(VideoDataSource::Filesystem {
+                    path: path.to_string_lossy().into_owned(),
+                });
+                video.should_dispatch_texture_updates(true);
                 self.loaded_source_url = Some(path);
                 self.loaded_video = Some(mxc_uri);
                 self.set_play_enabled(cx, true);
@@ -790,32 +678,6 @@ impl VideoMessagePlayer {
         }
     }
 
-    fn toggle_playback(&mut self, cx: &mut Cx) {
-        if self.is_unplayable() {
-            return;
-        }
-        let video = self.robrix_video_ref(cx);
-        let was_playing = self
-            .player_state
-            .lock()
-            .ok()
-            .map(|g| g.playing)
-            .unwrap_or(false);
-        if was_playing || video.is_playing(cx) {
-            video.pause_playback(cx);
-            if let Ok(mut s) = self.player_state.lock() {
-                s.playing = false;
-            }
-        } else {
-            video.begin_playback(cx);
-            if let Ok(mut s) = self.player_state.lock() {
-                s.playing = true;
-            }
-            set_active_video(self.widget_uid());
-        }
-        self.sync_controls(cx);
-    }
-
     fn pause_for_other_video(&mut self, cx: &mut Cx) {
         let was_playing = self
             .player_state
@@ -824,7 +686,7 @@ impl VideoMessagePlayer {
             .map(|g| g.playing)
             .unwrap_or(false);
         if was_playing {
-            self.robrix_video_ref(cx).pause_playback(cx);
+            self.video_ref(cx).pause_playback(cx);
         }
         if let Ok(mut s) = self.player_state.lock() {
             s.playing = false;
@@ -846,9 +708,9 @@ impl VideoMessagePlayer {
         };
         let _ = new_muted;
         if new_muted {
-            self.robrix_video_ref(cx).mute_playback(cx);
+            self.video_ref(cx).mute_playback(cx);
         } else {
-            self.robrix_video_ref(cx).unmute_playback(cx);
+            self.video_ref(cx).unmute_playback(cx);
         }
         self.sync_controls(cx);
     }
@@ -860,15 +722,12 @@ impl VideoMessagePlayer {
         let Some(source_url) = self.loaded_source_url.clone() else {
             return;
         };
-        let position_ms = self.robrix_video_ref(cx).current_position_ms();
-        self.robrix_video_ref(cx).stop_and_cleanup_resources(cx);
+        let position_ms = self.video_ref(cx).current_position_ms() as u64;
+        self.video_ref(cx).stop_and_cleanup_resources(cx);
         if let Ok(mut state) = self.player_state.lock() {
             state.playing = false;
         }
         self.sync_controls(cx);
-        if let Ok(mut ui) = self.ui_state.lock() {
-            ui.maximised = true;
-        }
         cx.action(VideoMessagePlayerModalAction::Open {
             inline_uid: self.widget_uid(),
             source_url,
@@ -903,7 +762,12 @@ impl VideoMessagePlayer {
         self.total_ms() as f64 / 1000.0
     }
 
+    #[allow(unreachable_code, unused_variables)]
     fn sync_controls(&mut self, cx: &mut Cx) {
+        // Short-circuited while the makepad Video widget's own controls
+        // are driving play/pause/slider state. The body below is kept
+        // for the eventual re-enable.
+        return;
         let (playing, position_ms) = self
             .player_state
             .lock()
@@ -975,8 +839,11 @@ impl VideoMessagePlayer {
             });
             return;
         }
-        self.robrix_video_ref(cx)
-            .set_poster_to_solid_color(cx, placeholder_fallback_color());
+        let color = placeholder_fallback_color();
+        let texture = ImageBuffer::new(&color, 1, 1)
+            .ok()
+            .map(|buf| buf.into_new_texture(cx));
+        self.video_ref(cx).set_thumbnail_texture(cx, texture);
     }
 
     fn poll_blurhash_receiver(&mut self, cx: &mut Cx) {
@@ -991,20 +858,23 @@ impl VideoMessagePlayer {
             Some((width, height, data)) => {
                 if let Ok(buffer) = ImageBuffer::new(&data, width as usize, height as usize) {
                     let texture = buffer.into_new_texture(cx);
-                    self.robrix_video_ref(cx).set_blurhash_texture(cx, texture);
+                    self.video_ref(cx).set_thumbnail_texture(cx, Some(texture));
                     self.blurhash_texture_key = self.blurhash_decode_key.take();
                 }
             }
             None => {
                 self.blurhash_decode_key = None;
-                self.robrix_video_ref(cx)
-                    .set_poster_to_solid_color(cx, placeholder_fallback_color());
+                let color = placeholder_fallback_color();
+                let texture = ImageBuffer::new(&color, 1, 1)
+                    .ok()
+                    .map(|buf| buf.into_new_texture(cx));
+                self.video_ref(cx).set_thumbnail_texture(cx, texture);
             }
         }
     }
 
-    pub fn robrix_video_ref(&self, cx: &mut Cx) -> RobrixVideoRef {
-        self.view.robrix_video(cx, ids!(surface.robrix_video))
+    pub fn video_ref(&self, cx: &mut Cx) -> VideoRef {
+        self.view.video(cx, ids!(surface.robrix_video))
     }
 
     pub fn loaded_source_url(&self) -> Option<PathBuf> {
@@ -1012,7 +882,7 @@ impl VideoMessagePlayer {
     }
 
     fn begin_inline_after_modal(&mut self, cx: &mut Cx) {
-        self.robrix_video_ref(cx).begin_playback(cx);
+        self.video_ref(cx).begin_playback(cx);
         if let Ok(mut state) = self.player_state.lock() {
             state.playing = true;
             state.position_ms = 0;
@@ -1063,10 +933,22 @@ impl VideoMessagePlayerRef {
         })
     }
 
-    pub fn robrix_video(&self, cx: &mut Cx) -> RobrixVideoRef {
+    pub fn robrix_video(&self, cx: &mut Cx) -> VideoRef {
         self.borrow()
-            .map(|inner| inner.robrix_video_ref(cx))
+            .map(|inner| inner.video_ref(cx))
             .unwrap_or_default()
+    }
+
+    pub fn populate_from_loaded_url(
+        &self,
+        cx: &mut Cx,
+        summary: VideoSummary,
+        source_url: PathBuf,
+        blurhash: Option<String>,
+    ) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.populate_from_loaded_url(cx, summary, source_url, blurhash);
+        }
     }
 
     pub fn set_play_button_text(&self, _cx: &mut Cx, _text: &str) {}
@@ -1271,50 +1153,6 @@ mod tests_video_message_player {
         );
     }
 
-    // ---- apply_video_slider_drag ----
-
-    #[test]
-    fn test_apply_video_slider_drag_start_pauses_playback() {
-        let mut state = VideoPlayerState {
-            playing: true,
-            position_ms: 1_000,
-        };
-        apply_video_slider_drag(
-            &mut state,
-            0.5,
-            4_000,
-            DragPhase::Start { was_playing: true },
-        );
-        assert!(!state.playing);
-        assert_eq!(state.position_ms, 2_000);
-    }
-
-    #[test]
-    fn test_apply_video_slider_drag_end_resumes_when_was_playing() {
-        let mut state = VideoPlayerState {
-            playing: false,
-            position_ms: 500,
-        };
-        apply_video_slider_drag(
-            &mut state,
-            0.25,
-            4_000,
-            DragPhase::End { was_playing: true },
-        );
-        assert!(state.playing);
-        assert_eq!(state.position_ms, 1_000);
-    }
-
-    #[test]
-    fn test_apply_video_slider_drag_end_does_not_resume_at_end() {
-        let mut state = VideoPlayerState {
-            playing: false,
-            position_ms: 0,
-        };
-        apply_video_slider_drag(&mut state, 1.0, 4_000, DragPhase::End { was_playing: true });
-        assert!(!state.playing);
-    }
-
     // ---- apply_volume_action ----
 
     #[test]
@@ -1377,34 +1215,6 @@ mod tests_video_message_player {
         apply_volume_action(&mut state, VolumeAction::SetLevel(0.0));
         assert!(state.muted);
         assert_eq!(state.restore_level, 0.2);
-    }
-
-    // ---- toggle_maximise ----
-
-    #[test]
-    fn test_toggle_maximise_round_trip() {
-        let mut state = VideoUiState::default();
-        toggle_maximise(&mut state);
-        assert!(state.maximised);
-        toggle_maximise(&mut state);
-        assert!(!state.maximised);
-    }
-
-    #[test]
-    fn test_close_button_closes_via_toggle_maximise() {
-        let mut state = VideoUiState {
-            maximised: true,
-            card_rect: None,
-        };
-        toggle_maximise(&mut state);
-        assert!(!state.maximised);
-
-        let mut scrim_state = VideoUiState {
-            maximised: true,
-            card_rect: None,
-        };
-        toggle_maximise(&mut scrim_state);
-        assert!(!scrim_state.maximised);
     }
 
     // ---- Arc<Mutex<...>> shared-state contracts (modal ↔ inline) ----
@@ -1867,24 +1677,6 @@ mod tests_video_message_player {
     }
 
     #[test]
-    fn test_modal_slider_drag_updates_shared_state() {
-        let state = Arc::new(Mutex::new(VideoPlayerState {
-            playing: true,
-            position_ms: 0,
-        }));
-        let modal_binding = Arc::clone(&state);
-        apply_video_slider_drag(
-            &mut modal_binding.lock().unwrap(),
-            0.5,
-            4_000,
-            DragPhase::Start { was_playing: true },
-        );
-        let guard = state.lock().unwrap();
-        assert_eq!(guard.position_ms, 2_000);
-        assert!(!guard.playing);
-    }
-
-    #[test]
     fn test_modal_mute_propagates_to_inline_volume() {
         let volume = Arc::new(Mutex::new(VideoVolumeState {
             muted: false,
@@ -1897,32 +1689,5 @@ mod tests_video_message_player {
         assert!(guard.muted);
         assert_eq!(guard.level, 0.0);
         assert_eq!(guard.restore_level, 0.7);
-    }
-
-    #[test]
-    fn test_close_modal_preserves_playback_state() {
-        let state = Arc::new(Mutex::new(VideoPlayerState {
-            playing: true,
-            position_ms: 3_500,
-        }));
-        let volume = Arc::new(Mutex::new(VideoVolumeState {
-            muted: true,
-            level: 0.0,
-            restore_level: 0.6,
-        }));
-        let mut ui = VideoUiState {
-            maximised: true,
-            card_rect: None,
-        };
-
-        toggle_maximise(&mut ui);
-
-        assert!(!ui.maximised);
-        let player = state.lock().unwrap();
-        assert_eq!(player.position_ms, 3_500);
-        assert!(player.playing);
-        let vol = volume.lock().unwrap();
-        assert!(vol.muted);
-        assert_eq!(vol.level, 0.0);
     }
 }

@@ -22,7 +22,6 @@ pub mod unread_badge;
 pub mod verification_badge;
 pub mod restore_status_view;
 pub mod image_viewer;
-pub mod robrix_video;
 pub mod video_message_player;
 pub mod video_message_player_modal;
 
@@ -50,7 +49,6 @@ pub fn script_mod(vm: &mut ScriptVm) {
     restore_status_view::script_mod(vm);
     confirmation_modal::script_mod(vm);
     image_viewer::script_mod(vm);
-    robrix_video::script_mod(vm);
     video_message_player::script_mod(vm);
     video_message_player_modal::script_mod(vm);
 }
