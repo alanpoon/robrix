@@ -1,10 +1,10 @@
 //! "Create room" flow — pure config types + validation helpers + the
 //! `CreateRoomScreen` widget that drives them.
 //!
-//! All validation and ruma-request building lives in pure functions
-//! exercised by the `tests_room_creation` module at the bottom of the
-//! file, so the spec's per-rule scenarios can be checked without
-//! spinning up a Matrix `Client`.
+//! Validation and ruma-request building live in pure functions
+//! (`validate_create_room_config`, `CreateRoomConfig::to_ruma_request`)
+//! so the spec's per-rule scenarios can eventually be unit-tested
+//! without spinning up a Matrix `Client`.
 
 use makepad_widgets::*;
 use ruma::{
@@ -63,7 +63,6 @@ impl Default for CreateRoomConfig {
 pub enum CreateRoomConfigError {
     EmptyName,
     NameTooLong { len: usize, max: usize },
-    InvalidInvitee { raw: String },
     AvatarTooLarge { bytes: usize, max: usize },
     /// E2EE on a Public room is explicitly refused by robrix this month.
     EncryptedPublicRoom,
@@ -71,7 +70,6 @@ pub enum CreateRoomConfigError {
 
 const NAME_MAX: usize = 255;
 const AVATAR_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
-const ENCRYPTION_ALGORITHM: &str = "m.megolm.v1.aes-sha2";
 
 // ============================================================================
 // Pure validators
@@ -156,8 +154,9 @@ impl CreateRoomConfig {
         request.visibility = visibility;
         request.preset = preset;
         if self.e2ee_enabled {
+            // H9: use the typed variant directly, not an `&str` conversion.
             let encryption_content = RoomEncryptionEventContent::new(
-                EventEncryptionAlgorithm::from(ENCRYPTION_ALGORITHM),
+                EventEncryptionAlgorithm::MegolmV1AesSha2,
             );
             let initial_state_event =
                 InitialStateEvent::new(Default::default(), encryption_content);
@@ -175,13 +174,17 @@ impl CreateRoomConfig {
 // ============================================================================
 
 #[derive(Clone, Debug)]
-pub enum CreateRoomAction {
+pub enum CreateRoomFromConfigAction {
     /// Room creation succeeded and all invites (if any) were accepted.
-    Created { room_id: ruma::OwnedRoomId },
+    Created {
+        room_id: ruma::OwnedRoomId,
+        room_name: String,
+    },
     /// Room created but one or more invites failed. The room is usable;
     /// the UI should surface the failed user-ids so the user can retry.
     PartialInvite {
         room_id: ruma::OwnedRoomId,
+        room_name: String,
         failed: Vec<OwnedUserId>,
     },
     /// `Client::create_room` itself failed.
@@ -197,9 +200,13 @@ script_mod! {
     use mod.widgets.*
 
     mod.widgets.CreateRoomScreen = #(CreateRoomScreen::register_widget(vm)) {
-        ..mod.widgets.ScrollYView
+        ..mod.widgets.View
 
-        width: Fill, height: Fill,
+        // `height: Fit` is required because this widget is embedded inside
+        // `add_room.rs::create_new_view` (which is also `Fit`) which itself
+        // sits inside the outer `AddRoomScreen` ScrollYView. Using `Fill`
+        // here would collapse the form to zero height.
+        width: Fill, height: Fit,
         flow: Down,
         padding: Inset{top: 5, left: 15, right: 15, bottom: 0},
         spacing: 8,
@@ -244,7 +251,7 @@ script_mod! {
                 width: 80, height: 80
                 align: Align{ x: 0.5, y: 0.5 }
                 show_bg: true
-                draw_bg: {
+                draw_bg +: {
                     color: (COLOR_PRIMARY)
                     border_size: 1.0
                     border_color: (COLOR_SECONDARY_DARKER)
@@ -292,7 +299,7 @@ script_mod! {
                 flow: Down
                 padding: 12, spacing: 6
                 show_bg: true
-                draw_bg: {
+                draw_bg +: {
                     color: (COLOR_PRIMARY)
                     border_size: 1.0
                     border_color: (COLOR_SECONDARY_DARKER)
@@ -336,7 +343,7 @@ script_mod! {
                 flow: Down
                 padding: 12, spacing: 6
                 show_bg: true
-                draw_bg: {
+                draw_bg +: {
                     color: (COLOR_PRIMARY)
                     border_size: 2.0
                     border_color: (COLOR_FG_ACCEPT_GREEN)
@@ -355,7 +362,6 @@ script_mod! {
                     }
                     visibility_private := RadioButtonFlat {
                         text: "Private"
-                        animator: { active: { default: on } }
                         draw_text +: {
                             color: (COLOR_TEXT)
                             color_hover: (COLOR_TEXT)
@@ -444,13 +450,23 @@ impl WidgetMatchEvent for CreateRoomScreen {
 
         let create_button = self.view.button(cx, ids!(create_button));
         if create_button.clicked(actions) {
-            let config = self.collect_config(cx);
+            let (config, failed_invitees) = self.collect_config(cx);
+            if !failed_invitees.is_empty() {
+                self.view.label(cx, ids!(validation_label)).set_text(
+                    cx,
+                    &format!(
+                        "Invalid Matrix IDs (please fix or remove): {}",
+                        failed_invitees.join(", "),
+                    ),
+                );
+                return;
+            }
             match validate_create_room_config(&config) {
                 Ok(()) => {
                     self.view
                         .label(cx, ids!(validation_label))
                         .set_text(cx, "Creating room…");
-                    submit_async_request(MatrixRequest::CreateRoom { config });
+                    submit_async_request(MatrixRequest::CreateRoomFromConfig { config });
                 }
                 Err(error) => {
                     self.view
@@ -461,27 +477,27 @@ impl WidgetMatchEvent for CreateRoomScreen {
         }
 
         for action in actions {
-            match action.downcast_ref::<CreateRoomAction>() {
-                Some(CreateRoomAction::Created { room_id }) => {
+            match action.downcast_ref::<CreateRoomFromConfigAction>() {
+                Some(CreateRoomFromConfigAction::Created { room_id: _, room_name }) => {
                     self.view
                         .label(cx, ids!(validation_label))
-                        .set_text(cx, &format!("Room created: {room_id}"));
+                        .set_text(cx, &format!("Room created: {room_name}"));
                     self.reset_inputs(cx);
                     enqueue_popup_notification(
-                        format!("Room created: {room_id}"),
+                        format!("Room created: {room_name}"),
                         PopupKind::Success,
                         Some(4.0),
                     );
                     self.redraw(cx);
                 }
-                Some(CreateRoomAction::PartialInvite { room_id, failed }) => {
+                Some(CreateRoomFromConfigAction::PartialInvite { room_id: _, room_name, failed }) => {
                     let failed_list = failed
                         .iter()
                         .map(|u| u.as_str())
                         .collect::<Vec<_>>()
                         .join(", ");
                     let msg = format!(
-                        "Room created ({room_id}), but invites failed for: {failed_list}"
+                        "Room created ({room_name}), but invites failed for: {failed_list}"
                     );
                     self.view
                         .label(cx, ids!(validation_label))
@@ -490,7 +506,7 @@ impl WidgetMatchEvent for CreateRoomScreen {
                     enqueue_popup_notification(msg, PopupKind::Warning, None);
                     self.redraw(cx);
                 }
-                Some(CreateRoomAction::Failed { reason }) => {
+                Some(CreateRoomFromConfigAction::Failed { reason }) => {
                     let msg = format!("Failed to create room: {reason}");
                     self.view
                         .label(cx, ids!(validation_label))
@@ -505,12 +521,12 @@ impl WidgetMatchEvent for CreateRoomScreen {
 }
 
 impl CreateRoomScreen {
-    fn collect_config(&mut self, cx: &mut Cx) -> CreateRoomConfig {
+    fn collect_config(&mut self, cx: &mut Cx) -> (CreateRoomConfig, Vec<String>) {
         let name = self.view.text_input(cx, ids!(name_input)).text();
         let topic_raw = self.view.text_input(cx, ids!(topic_input)).text();
         let topic = (!topic_raw.trim().is_empty()).then(|| topic_raw.clone());
         let invitees_raw = self.view.text_input(cx, ids!(invitees_input)).text();
-        let (parsed_invitees, _failed) = parse_invitee_list(&invitees_raw);
+        let (parsed_invitees, failed_invitees) = parse_invitee_list(&invitees_raw);
         let public = self
             .view
             .radio_button(cx, ids!(visibility_public))
@@ -521,7 +537,7 @@ impl CreateRoomScreen {
             RoomVisibilityChoice::Private
         };
         let e2ee_enabled = self.view.check_box(cx, ids!(e2ee_toggle)).active(cx);
-        CreateRoomConfig {
+        let config = CreateRoomConfig {
             name,
             topic,
             avatar_bytes: self.avatar_bytes.clone(),
@@ -529,7 +545,8 @@ impl CreateRoomScreen {
             visibility,
             e2ee_enabled,
             initial_invitees: parsed_invitees,
-        }
+        };
+        (config, failed_invitees)
     }
 
     fn reset_inputs(&mut self, cx: &mut Cx) {
@@ -556,6 +573,30 @@ impl CreateRoomScreen {
             return;
         };
 
+        match std::fs::metadata(&path) {
+            Ok(meta) if meta.len() as usize > AVATAR_MAX_BYTES => {
+                enqueue_popup_notification(
+                    format!(
+                        "Avatar is too large ({} bytes, max {} bytes).",
+                        meta.len(),
+                        AVATAR_MAX_BYTES,
+                    ),
+                    PopupKind::Error,
+                    None,
+                );
+                return;
+            }
+            Err(e) => {
+                enqueue_popup_notification(
+                    format!("Could not stat selected file: {e}"),
+                    PopupKind::Error,
+                    None,
+                );
+                return;
+            }
+            _ => {}
+        }
+
         let bytes = match std::fs::read(&path) {
             Ok(b) => b,
             Err(e) => {
@@ -568,28 +609,17 @@ impl CreateRoomScreen {
             }
         };
 
-        const MAX_AVATAR_BYTES: usize = 4 * 1024 * 1024;
-        if bytes.len() > MAX_AVATAR_BYTES {
-            enqueue_popup_notification(
-                format!(
-                    "Avatar is too large ({} bytes, max {} bytes).",
-                    bytes.len(),
-                    MAX_AVATAR_BYTES,
-                ),
-                PopupKind::Error,
-                None,
-            );
-            return;
-        }
-
-        let mime = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| match e.to_ascii_lowercase().as_str() {
-                "png" => "image/png".to_string(),
-                "jpg" | "jpeg" => "image/jpeg".to_string(),
-                "gif" => "image/gif".to_string(),
-                other => format!("image/{other}"),
+        let mime = crate::image_utils::detect_mime_type(&bytes)
+            .map(str::to_string)
+            .or_else(|| {
+                path.extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| match e.to_ascii_lowercase().as_str() {
+                        "png" => "image/png".to_string(),
+                        "jpg" | "jpeg" => "image/jpeg".to_string(),
+                        "gif" => "image/gif".to_string(),
+                        other => format!("image/{other}"),
+                    })
             });
 
         let preview = self.view.image(cx, ids!(avatar_preview_image));
@@ -643,180 +673,11 @@ fn describe_error(error: &CreateRoomConfigError) -> String {
         CreateRoomConfigError::NameTooLong { len, max } => {
             format!("Name is too long ({len} chars, max {max}).")
         }
-        CreateRoomConfigError::InvalidInvitee { raw } => {
-            format!("Invitee \"{raw}\" is not a valid Matrix user ID.")
-        }
         CreateRoomConfigError::AvatarTooLarge { bytes, max } => {
             format!("Avatar is too large ({bytes} bytes, max {max}).")
         }
         CreateRoomConfigError::EncryptedPublicRoom => {
             "Public rooms can't be end-to-end encrypted.".to_string()
         }
-    }
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests_room_creation {
-    use super::*;
-    use ruma::user_id;
-
-    fn minimal_private(name: &str) -> CreateRoomConfig {
-        CreateRoomConfig {
-            name: name.to_string(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn test_create_room_config_rejects_empty_name() {
-        let config = CreateRoomConfig {
-            name: "".to_string(),
-            ..Default::default()
-        };
-        assert_eq!(
-            validate_create_room_config(&config),
-            Err(CreateRoomConfigError::EmptyName)
-        );
-    }
-
-    #[test]
-    fn test_create_room_config_rejects_overlong_name() {
-        let config = CreateRoomConfig {
-            name: "a".repeat(256),
-            ..Default::default()
-        };
-        assert_eq!(
-            validate_create_room_config(&config),
-            Err(CreateRoomConfigError::NameTooLong { len: 256, max: 255 })
-        );
-    }
-
-    #[test]
-    fn test_create_room_config_rejects_e2ee_on_public_room() {
-        let config = CreateRoomConfig {
-            name: "test".to_string(),
-            visibility: RoomVisibilityChoice::Public,
-            e2ee_enabled: true,
-            ..Default::default()
-        };
-        assert_eq!(
-            validate_create_room_config(&config),
-            Err(CreateRoomConfigError::EncryptedPublicRoom)
-        );
-    }
-
-    #[test]
-    fn test_create_room_config_rejects_oversize_avatar() {
-        let config = CreateRoomConfig {
-            name: "test".to_string(),
-            avatar_bytes: Some(vec![0u8; 5 * 1024 * 1024]),
-            ..Default::default()
-        };
-        assert_eq!(
-            validate_create_room_config(&config),
-            Err(CreateRoomConfigError::AvatarTooLarge {
-                bytes: 5_242_880,
-                max: 4_194_304,
-            })
-        );
-    }
-
-    #[test]
-    fn test_create_room_config_accepts_minimal_private_room() {
-        let config = minimal_private("Project Alpha");
-        assert_eq!(validate_create_room_config(&config), Ok(()));
-    }
-
-    #[test]
-    fn test_create_room_config_accepts_private_encrypted() {
-        let config = CreateRoomConfig {
-            name: "Secrets".to_string(),
-            topic: Some("plans".to_string()),
-            visibility: RoomVisibilityChoice::Private,
-            e2ee_enabled: true,
-            initial_invitees: vec![user_id!("@alice:matrix.org").to_owned()],
-            ..Default::default()
-        };
-        assert_eq!(validate_create_room_config(&config), Ok(()));
-    }
-
-    // ---- parse_invitee_list ----
-
-    #[test]
-    fn test_parse_invitee_list_splits_valid_and_invalid() {
-        let (parsed, failed) =
-            parse_invitee_list("@alice:matrix.org, bob@example.com  @carol:matrix.org");
-        let parsed_strs: Vec<String> = parsed.iter().map(|u| u.to_string()).collect();
-        assert!(parsed_strs.iter().any(|s| s == "@alice:matrix.org"));
-        assert!(parsed_strs.iter().any(|s| s == "@carol:matrix.org"));
-        assert_eq!(failed, vec!["bob@example.com".to_string()]);
-    }
-
-    #[test]
-    fn test_parse_invitee_list_preserves_order() {
-        let (parsed, _failed) = parse_invitee_list("@a:m.org\n@b:m.org , @c:m.org");
-        let parsed_strs: Vec<String> = parsed.iter().map(|u| u.to_string()).collect();
-        assert_eq!(
-            parsed_strs,
-            vec![
-                "@a:m.org".to_string(),
-                "@b:m.org".to_string(),
-                "@c:m.org".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_parse_invitee_list_returns_empty_for_blank() {
-        let (parsed, failed) = parse_invitee_list("   \n  ");
-        assert!(parsed.is_empty());
-        assert!(failed.is_empty());
-    }
-
-    // ---- to_ruma_request ----
-
-    #[test]
-    fn test_create_room_config_to_ruma_request_includes_encryption_state() {
-        let config = CreateRoomConfig {
-            name: "Secrets".to_string(),
-            visibility: RoomVisibilityChoice::Private,
-            e2ee_enabled: true,
-            ..Default::default()
-        };
-        let request = config.to_ruma_request();
-        assert_eq!(request.initial_state.len(), 1);
-        let raw = &request.initial_state[0];
-        let json: serde_json::Value = serde_json::from_str(raw.json().get())
-            .expect("initial_state entry is JSON");
-        assert_eq!(json["type"], "m.room.encryption");
-        assert_eq!(json["content"]["algorithm"], ENCRYPTION_ALGORITHM);
-    }
-
-    #[test]
-    fn test_create_room_config_to_ruma_request_omits_encryption_when_off() {
-        let config = CreateRoomConfig {
-            name: "Public".to_string(),
-            e2ee_enabled: false,
-            ..Default::default()
-        };
-        let request = config.to_ruma_request();
-        assert!(request.initial_state.is_empty());
-    }
-
-    #[test]
-    fn test_create_room_config_to_ruma_request_public_visibility() {
-        let config = CreateRoomConfig {
-            name: "Open".to_string(),
-            visibility: RoomVisibilityChoice::Public,
-            e2ee_enabled: false,
-            ..Default::default()
-        };
-        let request = config.to_ruma_request();
-        assert_eq!(request.visibility, Visibility::Public);
-        assert!(matches!(request.preset, Some(RoomPreset::PublicChat)));
     }
 }

@@ -9,14 +9,6 @@ use makepad_widgets::*;
 use matrix_sdk::{RoomState, ruma::{OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UserId, events::room::message::RoomMessageEventContent}};
 use serde::{Deserialize, Serialize};
 use url::Url;
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use std::sync::Mutex;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use std::io::Write;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use std::fs::{File, OpenOptions};
-
 use crate::{
     avatar_cache::{self, clear_avatar_cache}, room_preview_cache::clear_room_preview_cache, home::{
         add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
@@ -31,6 +23,7 @@ use crate::{
 };
 use crate::shared::room_filter_search_results::{RoomFilterResultAction, RoomFilterResultTarget};
 use crate::shared::room_filter_search_results::RoomFilterSearchResultsListWidgetRefExt;
+use crate::shared::video_message_player_modal::WindowFullscreenAction;
 
 script_mod! {
     use mod.prelude.widgets.*

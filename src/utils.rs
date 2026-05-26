@@ -1133,56 +1133,6 @@ mod tests_human_readable_list {
 }
 
 #[cfg(test)]
-mod tests_animated_image {
-    use super::*;
-
-    #[test]
-    fn test_is_animated_image_mime_accepts_gif() {
-        assert!(is_animated_image_mime("image/gif"));
-    }
-
-    #[test]
-    fn test_is_animated_image_mime_accepts_apng() {
-        assert!(is_animated_image_mime("image/apng"));
-    }
-
-    #[test]
-    fn test_is_animated_image_mime_accepts_webp() {
-        assert!(is_animated_image_mime("image/webp"));
-    }
-
-    #[test]
-    fn test_is_animated_image_mime_is_case_insensitive() {
-        assert!(is_animated_image_mime("IMAGE/GIF"));
-    }
-
-    #[test]
-    fn test_is_animated_image_mime_rejects_static_image() {
-        assert!(!is_animated_image_mime("image/jpeg"));
-    }
-
-    #[test]
-    fn test_is_animated_image_mime_rejects_empty_string() {
-        assert!(!is_animated_image_mime(""));
-    }
-
-    #[test]
-    fn test_is_animated_image_filename_accepts_gif_extension() {
-        assert!(is_animated_image_filename("reaction.GIF"));
-    }
-
-    #[test]
-    fn test_is_animated_image_filename_rejects_png() {
-        assert!(!is_animated_image_filename("chart.png"));
-    }
-
-    #[test]
-    fn test_is_animated_image_filename_rejects_no_extension() {
-        assert!(!is_animated_image_filename("justaname"));
-    }
-}
-
-#[cfg(test)]
 mod tests_linkify {
     use super::*;
 

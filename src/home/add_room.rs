@@ -288,6 +288,7 @@ script_mod! {
             join_existing_tab := RobrixNeutralIconButton {
                 padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
                 text: "Join existing room"
+                enabled: false
             }
             create_new_tab := RobrixNeutralIconButton {
                 padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
@@ -548,7 +549,23 @@ script_mod! {
             width: Fill
             height: 20
         }
-        
+
+        }
+
+        create_new_view := View {
+            visible: false
+            width: Fill
+            height: Fit
+            flow: Down
+
+            LineH { padding: 10, margin: Inset{top: 10, right: 2} }
+
+            create_room_page_label := SubsectionLabel {
+                text: "Create a new room:"
+            }
+
+            create_room_page_screen := mod.widgets.CreateRoomScreen {}
+        }
     }
 
     mod.widgets.CreateRoomModal = #(CreateRoomModal::register_widget(vm)) {
@@ -1175,7 +1192,7 @@ impl CreateRoomForm {
         create_room_button.set_enabled(cx, !create_room_name_input.text().trim().is_empty());
         create_room_button.set_text(cx, tr_key(self.app_language, "add_room.create_room.button.create"));
         create_room_button.reset_hover(cx);
-        create_room_encrypted_toggle.set_active(cx, self.create_encrypted_room);
+        create_room_encrypted_toggle.set_active(cx, self.create_encrypted_room, Animate::No);
         self.set_create_room_public(cx, self.create_public_room);
         self.set_visibility_popup_visible(cx, false);
         self.sync_mode_views(cx);
@@ -1541,11 +1558,15 @@ impl Widget for AddRoomScreen {
             if join_existing_tab.clicked(actions) {
                 self.view.view(cx, ids!(join_existing_view)).set_visible(cx, true);
                 self.view.view(cx, ids!(create_new_view)).set_visible(cx, false);
+                join_existing_tab.set_enabled(cx, false);
+                create_new_tab.set_enabled(cx, true);
                 self.redraw(cx);
             }
             if create_new_tab.clicked(actions) {
                 self.view.view(cx, ids!(join_existing_view)).set_visible(cx, false);
                 self.view.view(cx, ids!(create_new_view)).set_visible(cx, true);
+                join_existing_tab.set_enabled(cx, true);
+                create_new_tab.set_enabled(cx, false);
                 self.redraw(cx);
             }
 

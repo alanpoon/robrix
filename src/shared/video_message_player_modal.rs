@@ -75,8 +75,6 @@ script_mod! {
         inner_player := mod.widgets.VideoMessagePlayer {
             width: Fill
             height: Fill
-            min_width: 0
-            max_width: 999999
             show_maximise_button: false
             surface +: {
                 height: Fill

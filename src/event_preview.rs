@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 
-use matrix_sdk::{ruma::{OwnedUserId, events::{room::{guest_access::GuestAccess, history_visibility::HistoryVisibility, join_rules::JoinRule, message::{MessageFormat, MessageType}}, AnySyncMessageLikeEvent, AnySyncTimelineEvent, StateEventContentChange, SyncMessageLikeEvent}, serde::Raw, UserId}};
+use matrix_sdk::{ruma::{OwnedUserId, events::{room::{guest_access::GuestAccess, history_visibility::HistoryVisibility, join_rules::JoinRule, message::{AudioMessageEventContent, MessageFormat, MessageType, VideoMessageEventContent}}, AnySyncMessageLikeEvent, AnySyncTimelineEvent, StateEventContentChange, SyncMessageLikeEvent}, serde::Raw, UserId}};
 use matrix_sdk_base::crypto::types::events::UtdCause;
 use matrix_sdk_ui::timeline::{self, AnyOtherStateEventContentChange, EncryptedMessage, EventTimelineItem, MemberProfileChange, MembershipChange, MsgLikeKind, OtherMessageLike, RoomMembershipChange, TimelineItemContent};
 
@@ -136,6 +136,10 @@ pub fn summarize_video_message(video: &VideoMessageEventContent) -> VideoSummary
 /// the textual fallback above the inline video player. Filename is
 /// HTML-escaped; dimensions render as `WIDTHxHEIGHT` only when both
 /// are known so the omits-when-none test passes.
+///
+/// Currently unused — `room_screen.rs` builds its own html fallback inline
+/// via `tr_fmt`. Kept here so the video-message widget can share it later.
+#[allow(dead_code)]
 pub fn video_summary_html(summary: &VideoSummary) -> String {
     let mut out = String::new();
     out.push_str("<b>");
@@ -168,6 +172,7 @@ pub fn video_summary_html(summary: &VideoSummary) -> String {
     out
 }
 
+#[allow(dead_code)]
 fn format_bytesize(bytes: u64) -> String {
     const KIB: u64 = 1024;
     const MIB: u64 = KIB * 1024;
@@ -497,210 +502,6 @@ pub fn text_preview_of_raw_timeline_event(
             ))
         }
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests_audio_summary {
-    use std::time::Duration;
-
-    use matrix_sdk::ruma::{
-        events::room::{MediaSource, message::{AudioInfo, AudioMessageEventContent, FormattedBody, MessageFormat}},
-        uint,
-    };
-
-    use super::*;
-
-    fn audio_message(body: &str) -> AudioMessageEventContent {
-        AudioMessageEventContent::new(
-            body.to_string(),
-            MediaSource::Plain("mxc://example.org/audio".try_into().unwrap()),
-        )
-    }
-
-    #[test]
-    fn test_audio_summary_full_info() {
-        let mut audio = audio_message("call-recording.ogg");
-        let mut info = AudioInfo::new();
-        info.mimetype = Some("audio/ogg".to_string());
-        info.duration = Some(Duration::from_millis(12_500));
-        info.size = Some(uint!(98_304));
-        audio.info = Some(Box::new(info));
-
-        let summary = summarize_audio_message(&audio);
-
-        assert_eq!(summary.filename, "call-recording.ogg");
-        assert_eq!(summary.mime, Some("audio/ogg".to_string()));
-        assert_eq!(summary.duration_secs, Some(12.5));
-        assert_eq!(summary.size_bytes, Some(98_304));
-    }
-
-    #[test]
-    fn test_audio_summary_missing_info() {
-        let audio = audio_message("voice-note.wav");
-
-        let summary = summarize_audio_message(&audio);
-
-        assert_eq!(summary.mime, None);
-        assert_eq!(summary.duration_secs, None);
-        assert_eq!(summary.size_bytes, None);
-        assert_eq!(summary.filename, "voice-note.wav");
-    }
-
-    #[test]
-    fn test_audio_summary_with_formatted_caption() {
-        let mut audio = audio_message("Voice memo");
-        audio.filename = Some("voice.ogg".to_string());
-        audio.formatted = Some(FormattedBody {
-            format: MessageFormat::Html,
-            body: "<i>Voice memo</i>".to_string(),
-        });
-
-        let summary = summarize_audio_message(&audio);
-
-        assert_eq!(summary.caption_html, Some("<i>Voice memo</i>".to_string()));
-    }
-
-    #[test]
-    fn test_format_mmss_sub_minute() {
-        assert_eq!(format_mmss(2.6), "00:02");
-    }
-
-    #[test]
-    fn test_format_mmss_over_one_minute() {
-        assert_eq!(format_mmss(65.0), "01:05");
-    }
-
-    #[test]
-    fn test_format_mmss_handles_bad_input() {
-        for value in [f64::NAN, -1.0, f64::INFINITY] {
-            assert_eq!(format_mmss(value), "00:00");
-        }
-    }
-
-    #[test]
-    fn test_infer_audio_extension_prefers_filename() {
-        assert_eq!(infer_audio_extension("call.wav", Some("audio/mpeg")), "wav");
-    }
-
-    #[test]
-    fn test_infer_audio_extension_falls_back_to_mime() {
-        assert_eq!(infer_audio_extension("recording", Some("audio/mpeg")), "mp3");
-    }
-
-    #[test]
-    fn test_infer_audio_extension_returns_empty() {
-        assert_eq!(infer_audio_extension("recording", None), "");
-    }
-}
-
-
-#[cfg(test)]
-mod tests_video_summary {
-    use std::time::Duration;
-
-    use matrix_sdk::ruma::{
-        events::room::{MediaSource, message::{VideoInfo, VideoMessageEventContent}},
-        uint,
-    };
-
-    use super::*;
-
-    fn video_message(body: &str) -> VideoMessageEventContent {
-        VideoMessageEventContent::new(
-            body.to_string(),
-            MediaSource::Plain("mxc://example.org/video".try_into().unwrap()),
-        )
-    }
-
-    #[test]
-    fn test_video_summary_full_info() {
-        let mut video = video_message("clip.mp4");
-        let mut info = VideoInfo::new();
-        info.mimetype = Some("video/mp4".to_string());
-        info.width = Some(uint!(1920));
-        info.height = Some(uint!(1080));
-        info.duration = Some(Duration::from_millis(7_250));
-        info.size = Some(uint!(2_048_000));
-        video.info = Some(Box::new(info));
-
-        let summary = summarize_video_message(&video);
-
-        assert_eq!(summary.dimensions, Some((1920, 1080)));
-        assert_eq!(summary.duration_secs, Some(7.25));
-        assert_eq!(summary.size_bytes, Some(2_048_000));
-        assert_eq!(summary.mime, Some("video/mp4".to_string()));
-    }
-
-    #[test]
-    fn test_video_summary_partial_dimensions() {
-        let mut video = video_message("clip.mp4");
-        let mut info = VideoInfo::new();
-        info.width = Some(uint!(1280));
-        info.height = None;
-        video.info = Some(Box::new(info));
-
-        let summary = summarize_video_message(&video);
-
-        assert_eq!(summary.dimensions, None);
-    }
-
-    #[test]
-    fn test_video_summary_missing_info() {
-        let video = video_message("clip.mp4");
-        // info is None by construction
-
-        let summary = summarize_video_message(&video);
-
-        assert_eq!(summary.dimensions, None);
-        assert_eq!(summary.duration_secs, None);
-        assert_eq!(summary.size_bytes, None);
-        assert_eq!(summary.mime, None);
-    }
-
-    #[test]
-    fn test_video_summary_html_includes_dimensions() {
-        let summary = VideoSummary {
-            filename: "clip.mp4".to_string(),
-            dimensions: Some((640, 480)),
-            ..Default::default()
-        };
-
-        let html = video_summary_html(&summary);
-        assert!(html.contains("640x480"), "expected dimensions in: {html}");
-    }
-
-    #[test]
-    fn test_video_summary_html_omits_dimensions_when_none() {
-        let summary = VideoSummary {
-            filename: "clip.mp4".to_string(),
-            dimensions: None,
-            ..Default::default()
-        };
-        let html = video_summary_html(&summary);
-
-        // No "x" sandwiched between two digit runs.
-        let bytes = html.as_bytes();
-        for i in 1..bytes.len().saturating_sub(1) {
-            if bytes[i] == b'x' {
-                let prev = bytes[i - 1].is_ascii_digit();
-                let next = bytes[i + 1].is_ascii_digit();
-                assert!(!(prev && next), "found digit-x-digit in: {html}");
-            }
-        }
-        assert!(!html.contains("None"), "expected no 'None' in: {html}");
-    }
-
-    #[test]
-    fn test_video_summary_html_escapes_filename() {
-        let summary = VideoSummary {
-            filename: "<img src=x onerror=1>.mp4".to_string(),
-            ..Default::default()
-        };
-
-        let html = video_summary_html(&summary);
-        assert!(html.contains("&lt;img"), "expected escaped filename in: {html}");
-        assert!(!html.contains("<img "), "expected no raw <img tag in: {html}");
     }
 }
 

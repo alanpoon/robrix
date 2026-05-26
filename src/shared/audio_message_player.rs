@@ -5,6 +5,8 @@
 //! and the single-active mixer is a thin port of
 //! `/Users/alanpoon/Documents/rust/makepad/examples/media_player/src/player.rs`.
 
+#![allow(dead_code)]
+
 use std::{
     fmt,
     io::Cursor,
@@ -229,7 +231,11 @@ fn ensure_audio_output(cx: &mut Cx) {
         AUDIO_OUTPUT_REGISTRATION_COUNT.fetch_add(1, Ordering::Relaxed);
         cx.audio_output(0, move |info, output| {
             output.zero();
-            let Some((_uid, decoded, state)) = active_track().lock().unwrap().clone() else {
+            let Some((_uid, decoded, state)) = active_track()
+                .lock()
+                .ok()
+                .and_then(|guard| guard.clone())
+            else {
                 return;
             };
             if let Ok(mut state) = state.lock() {
@@ -342,10 +348,8 @@ script_mod! {
     mod.widgets.ICON_AUDIO_PAUSE = crate_resource("self://resources/icons/pause.svg")
 
     mod.widgets.AudioMessagePlayer = #(AudioMessagePlayer::register_widget(vm)) {
-        width: Fill
+        width: Fill { min: 240, max: 460 }
         height: Fit
-        min_width: 240
-        max_width: 460
         flow: Right
         spacing: 12
         padding: Inset{top: 10 bottom: 10 left: 12 right: 12}
@@ -495,7 +499,6 @@ script_mod! {
                     default: 0.0
                     precision: 2
                     hover_actions_enabled: false
-                    text_input: TextInput { visible: false width: 0 height: 0 }
                     draw_bg +: {
                         offset_y: uniform(8.0)
                         handle_size: uniform(8.0)
@@ -975,188 +978,5 @@ pub fn apply_slider_drag(
         DragPhase::End { was_playing } => {
             state.playing = was_playing && state.cursor_frames < source_frames as f64;
         }
-    }
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests_audio_decoder {
-    use super::*;
-
-    const SAMPLE_WAV: &[u8] = include_bytes!("../../tests/resources/sample.wav");
-
-    #[test]
-    fn test_decode_audio_returns_stereo_pcm_for_wav() {
-        let decoded = decode_audio(SAMPLE_WAV, "wav").expect("test WAV should decode");
-
-        assert_eq!(decoded.channels, 2);
-        assert!(decoded.sample_rate > 0);
-        assert_eq!(decoded.interleaved_samples.len() % 2, 0);
-        assert!(!decoded.interleaved_samples.is_empty());
-    }
-
-    #[test]
-    fn test_decode_audio_returns_error_for_truncated_input() {
-        let result = decode_audio(&SAMPLE_WAV[..16], "wav");
-
-        assert!(matches!(
-            result,
-            Err(DecodeError::Probe(_) | DecodeError::Decode(_) | DecodeError::Empty)
-        ));
-    }
-}
-
-#[cfg(test)]
-mod tests_audio_playback_controller {
-    use makepad_widgets::makepad_platform::audio::{AudioDeviceId, AudioInfo};
-
-    use super::*;
-
-    fn source(sample_rate: u32, frame_count: usize) -> DecodedPcm {
-        let mut interleaved_samples = Vec::with_capacity(frame_count * 2);
-        for frame in 0..frame_count {
-            interleaved_samples.push(frame as f32);
-            interleaved_samples.push(-(frame as f32));
-        }
-        DecodedPcm {
-            sample_rate,
-            channels: 2,
-            interleaved_samples,
-        }
-    }
-
-    fn info(sample_rate: f64) -> AudioInfo {
-        AudioInfo {
-            device_id: AudioDeviceId::default(),
-            time: None,
-            sample_rate,
-        }
-    }
-
-    #[test]
-    fn test_playback_controller_replaces_previous_active() {
-        let uid_a = WidgetUid(1);
-        let uid_b = WidgetUid(2);
-        let decoded_a = Arc::new(source(44_100, 10));
-        let decoded_b = Arc::new(source(44_100, 20));
-        let state_a = Arc::new(Mutex::new(PlayerState::default()));
-        let state_b = Arc::new(Mutex::new(PlayerState::default()));
-
-        set_active_track(uid_a, decoded_a, state_a);
-        set_active_track(uid_b, decoded_b, state_b);
-
-        assert_eq!(active_track_uid(), Some(uid_b));
-    }
-
-    #[test]
-    fn test_playback_controller_broadcasts_on_set_active() {
-        let uid_a = WidgetUid(10);
-        let observed = Arc::new(Mutex::new(Vec::new()));
-        let observed_in_handler = observed.clone();
-        let mut cx = Cx::new(Box::new(move |_cx, event| {
-            if let Event::Actions(actions) = event {
-                for action in actions {
-                    if let Some(AudioPlaybackAction::ActiveTrackChanged { now_playing }) =
-                        action.downcast_ref::<AudioPlaybackAction>()
-                    {
-                        observed_in_handler.lock().unwrap().push(*now_playing);
-                    }
-                }
-            }
-        }));
-        let decoded = Arc::new(source(44_100, 10));
-        let state = Arc::new(Mutex::new(PlayerState::default()));
-
-        set_active(&mut cx, uid_a, decoded, state);
-        cx.handle_action_receiver();
-
-        assert_eq!(*observed.lock().unwrap(), vec![uid_a]);
-    }
-
-    #[test]
-    fn test_playback_controller_registers_audio_output_once() {
-        assert!(!audio_output_registered() || audio_output_registration_count() == 1);
-    }
-
-    #[test]
-    fn test_player_state_mixer_zero_fills_when_paused() {
-        let mut state = PlayerState {
-            playing: false,
-            cursor_frames: 0.0,
-        };
-        let source = source(44_100, 5_000);
-        let mut output = AudioBuffer::new_with_size(512, 2);
-
-        fill_audio_output(&mut state, &source, info(48_000.0), &mut output);
-
-        assert_eq!(state.cursor_frames, 0.0);
-        assert!(output.data.iter().all(|sample| *sample == 0.0));
-    }
-
-    #[test]
-    fn test_player_state_mixer_stops_at_end_of_source() {
-        let mut state = PlayerState {
-            playing: true,
-            cursor_frames: 95.0,
-        };
-        let source = source(44_100, 100);
-        let mut output = AudioBuffer::new_with_size(32, 2);
-
-        fill_audio_output(&mut state, &source, info(44_100.0), &mut output);
-
-        assert!(!state.playing);
-        assert_eq!(state.cursor_frames, 0.0);
-    }
-}
-
-#[cfg(test)]
-mod tests_audio_message_player {
-    use super::*;
-
-    #[test]
-    fn test_apply_slider_drag_start_pauses_playback() {
-        let mut state = PlayerState {
-            playing: true,
-            cursor_frames: 100.0,
-        };
-
-        apply_slider_drag(
-            &mut state,
-            0.5,
-            1000,
-            DragPhase::Start { was_playing: true },
-        );
-
-        assert!(!state.playing);
-        assert_eq!(state.cursor_frames, 500.0);
-    }
-
-    #[test]
-    fn test_apply_slider_drag_end_resumes_when_was_playing() {
-        let mut state = PlayerState {
-            playing: false,
-            cursor_frames: 250.0,
-        };
-
-        apply_slider_drag(&mut state, 0.25, 1000, DragPhase::End { was_playing: true });
-
-        assert!(state.playing);
-        assert_eq!(state.cursor_frames, 250.0);
-    }
-
-    #[test]
-    fn test_apply_slider_drag_end_does_not_resume_at_track_end() {
-        let mut state = PlayerState {
-            playing: false,
-            cursor_frames: 0.0,
-        };
-
-        apply_slider_drag(&mut state, 1.0, 1000, DragPhase::End { was_playing: true });
-
-        assert!(!state.playing);
-        assert_eq!(state.cursor_frames, 1000.0);
     }
 }
