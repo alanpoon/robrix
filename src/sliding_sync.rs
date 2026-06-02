@@ -45,7 +45,7 @@ use hashbrown::{HashMap, HashSet};
 use crate::{
     account_manager::{self, Account},
     app::{AppStateAction, RoomFilterRemoteSearchAction}, app_data_dir, avatar_cache::AvatarUpdate, event_preview::{BeforeText, TextPreview, text_preview_of_raw_timeline_event, text_preview_of_timeline_item}, home::{
-        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, room_screen::{ActionResponseResultAction, InviteResultAction, ReportRoomResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
+        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, room_screen::{ActionResponseResultAction, InviteResultAction, MemberActionKind, MemberActionResultAction, MembersPaneFetchedAction, ReportRoomResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
     }, homeserver::{CapabilityProbeAction, HsCapabilities, IdentityProviderSummary}, login::login_screen::LoginAction, logout::{logout_confirm_modal::LogoutAction, logout_state_machine::{LogoutConfig, is_logout_in_progress, logout_with_state_machine}}, room_preview_cache::{enqueue_room_preview_update, RoomPreviewUpdate}, media_cache::{MediaCacheEntry, MediaCacheEntryRef}, persistence::{self, ClientSessionPersisted, load_app_state, take_skip_app_state_restore_once}, profile::{
         user_profile::UserProfile,
         user_profile_cache::{UserProfileUpdate, enqueue_user_profile_update},
@@ -973,6 +973,29 @@ pub enum MatrixRequest {
         room_id: OwnedRoomId,
         user_id: OwnedUserId,
     },
+    /// Request to kick the given user from the given room.
+    ///
+    /// Result is dispatched as a [`MemberActionResultAction`].
+    KickUser {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+        reason: Option<String>,
+    },
+    /// Request to ban the given user from the given room.
+    ///
+    /// Result is dispatched as a [`MemberActionResultAction`].
+    BanUser {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+        reason: Option<String>,
+    },
+    /// Request to unban the given user from the given room.
+    ///
+    /// Result is dispatched as a [`MemberActionResultAction`].
+    UnbanUser {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+    },
     /// Request to bind or unbind the configured botfather for the given room.
     SetRoomBotBinding {
         room_id: OwnedRoomId,
@@ -1004,6 +1027,17 @@ pub enum MatrixRequest {
         /// * If `true` (not recommended), only the local cache will be accessed.
         /// * If `false` (recommended), details will be fetched from the server.
         local_only: bool,
+    },
+    /// Request to fetch members of a room for display in the standalone
+    /// RoomMembersPane modal.
+    ///
+    /// Unlike [`MatrixRequest::GetRoomMembers`] (which routes through the
+    /// timeline channel), the result here is dispatched as a
+    /// [`MembersPaneFetchedAction`] via `Cx::post_action` so that the modal
+    /// can update without needing a timeline reference.
+    FetchMembersForPane {
+        room_id: OwnedRoomId,
+        memberships: RoomMemberships,
     },
     /// Request to fetch the preview (basic info) for the given room,
     /// either one that is joined locally or one that is unknown.
@@ -2556,6 +2590,96 @@ async fn matrix_worker_task(
                 });
             }
 
+            MatrixRequest::KickUser { room_id, user_id, reason } => {
+                let Some(client) = get_client() else { continue };
+                let _kick_task = Handle::current().spawn(async move {
+                    if let Some(room) = client.get_room(&room_id) {
+                        log!("Sending request to kick user {user_id} from room {room_id}...");
+                        let res = room.kick_user(&user_id, reason.as_deref()).await;
+                        match res {
+                            Ok(_) => Cx::post_action(MemberActionResultAction::Kicked {
+                                room_id,
+                                user_id,
+                            }),
+                            Err(error) => Cx::post_action(MemberActionResultAction::Failed {
+                                room_id,
+                                user_id,
+                                kind: MemberActionKind::Kick,
+                                error,
+                            }),
+                        }
+                    } else {
+                        error!("Room not found for kick user request {room_id}, {user_id}");
+                        Cx::post_action(MemberActionResultAction::Failed {
+                            room_id,
+                            user_id,
+                            kind: MemberActionKind::Kick,
+                            error: matrix_sdk::Error::UnknownError("Room not found in client's known list.".into()),
+                        });
+                    }
+                });
+            }
+
+            MatrixRequest::BanUser { room_id, user_id, reason } => {
+                let Some(client) = get_client() else { continue };
+                let _ban_task = Handle::current().spawn(async move {
+                    if let Some(room) = client.get_room(&room_id) {
+                        log!("Sending request to ban user {user_id} from room {room_id}...");
+                        let res = room.ban_user(&user_id, reason.as_deref()).await;
+                        match res {
+                            Ok(_) => Cx::post_action(MemberActionResultAction::Banned {
+                                room_id,
+                                user_id,
+                            }),
+                            Err(error) => Cx::post_action(MemberActionResultAction::Failed {
+                                room_id,
+                                user_id,
+                                kind: MemberActionKind::Ban,
+                                error,
+                            }),
+                        }
+                    } else {
+                        error!("Room not found for ban user request {room_id}, {user_id}");
+                        Cx::post_action(MemberActionResultAction::Failed {
+                            room_id,
+                            user_id,
+                            kind: MemberActionKind::Ban,
+                            error: matrix_sdk::Error::UnknownError("Room not found in client's known list.".into()),
+                        });
+                    }
+                });
+            }
+
+            MatrixRequest::UnbanUser { room_id, user_id } => {
+                let Some(client) = get_client() else { continue };
+                let _unban_task = Handle::current().spawn(async move {
+                    if let Some(room) = client.get_room(&room_id) {
+                        log!("Sending request to unban user {user_id} from room {room_id}...");
+                        let res = room.unban_user(&user_id, None).await;
+                        match res {
+                            Ok(_) => Cx::post_action(MemberActionResultAction::Unbanned {
+                                room_id,
+                                user_id,
+                            }),
+                            Err(error) => Cx::post_action(MemberActionResultAction::Failed {
+                                room_id,
+                                user_id,
+                                kind: MemberActionKind::Unban,
+                                error,
+                            }),
+                        }
+                    } else {
+                        error!("Room not found for unban user request {room_id}, {user_id}");
+                        Cx::post_action(MemberActionResultAction::Failed {
+                            room_id,
+                            user_id,
+                            kind: MemberActionKind::Unban,
+                            error: matrix_sdk::Error::UnknownError("Room not found in client's known list.".into()),
+                        });
+                    }
+                });
+            }
+
             MatrixRequest::SetRoomBotBinding {
                 room_id,
                 bound,
@@ -2745,6 +2869,43 @@ async fn matrix_worker_task(
                         match room.members(memberships).await {
                             Ok(members) => send_update(members, "Successfully fetched"),
                             Err(e) => error!("Failed to fetch room members for {timeline_kind}: {e:?}"),
+                        }
+                    }
+                });
+            }
+
+            MatrixRequest::FetchMembersForPane { room_id, memberships } => {
+                let Some(client) = get_client() else { continue };
+                let _fetch_task = Handle::current().spawn(async move {
+                    let Some(room) = client.get_room(&room_id) else {
+                        error!("Room not found for fetch members for pane request: {room_id}");
+                        Cx::post_action(MembersPaneFetchedAction::Failed {
+                            room_id,
+                            error: matrix_sdk::Error::UnknownError("Room not found.".into()),
+                        });
+                        return;
+                    };
+                    let local_members = room.members_no_sync(memberships).await.unwrap_or_default();
+                    if !local_members.is_empty() {
+                        log!("Local cache has {} members for pane in room {room_id}", local_members.len());
+                        Cx::post_action(MembersPaneFetchedAction::Fetched {
+                            room_id: room_id.clone(),
+                            members: Arc::new(local_members),
+                            is_partial: true,
+                        });
+                    }
+                    match room.members(memberships).await {
+                        Ok(members) => {
+                            log!("Successfully fetched {} members for pane in room {room_id}", members.len());
+                            Cx::post_action(MembersPaneFetchedAction::Fetched {
+                                room_id,
+                                members: Arc::new(members),
+                                is_partial: false,
+                            });
+                        }
+                        Err(error) => {
+                            error!("Failed to fetch members for pane in room {room_id}: {error:?}");
+                            Cx::post_action(MembersPaneFetchedAction::Failed { room_id, error });
                         }
                     }
                 });

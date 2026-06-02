@@ -18,7 +18,7 @@ use crate::{
     avatar_cache::{self, clear_avatar_cache}, room_preview_cache::clear_room_preview_cache, home::{
         add_room::{CreateRoomModalAction, CreateRoomModalWidgetRefExt, StartChatModalAction, StartChatModalWidgetRefExt},
         bot_binding_modal::{BotBindingModalAction, BotBindingModalWidgetRefExt},
-        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_screen::{InviteAction, MessageAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states}, room_settings_modal::{RoomSettingsAction, RoomSettingsModalWidgetRefExt, StdinCommandAction}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
+        event_source_modal::{EventSourceModalAction, EventSourceModalWidgetRefExt}, invite_modal::{InviteModalAction, InviteModalWidgetRefExt, mark_invite_modal_closed}, invite_screen::{InviteScreenWidgetRefExt, LeaveRoomResultAction}, main_desktop_ui::MainDesktopUiAction, navigation_tab_bar::{NavigationBarAction, SelectedTab}, new_message_context_menu::NewMessageContextMenuWidgetRefExt, room_context_menu::{RoomContextMenuAction, RoomContextMenuWidgetRefExt}, room_members_pane::{RoomMembersPaneAction, RoomMembersPaneWidgetRefExt}, room_screen::{InviteAction, MembersPaneFetchedAction, MessageAction, RoomScreenWidgetRefExt, TimelineUpdate, clear_timeline_states}, room_settings_modal::{RoomSettingsAction, RoomSettingsModalWidgetRefExt, StdinCommandAction}, rooms_list::{RoomsListAction, RoomsListRef, RoomsListUpdate, clear_all_invited_rooms, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, space_lobby::SpaceLobbyScreenWidgetRefExt, spaces_bar::SpacesBarRef
     }, i18n::{AppLanguage, tr_fmt, tr_key}, join_leave_room_modal::{
         JoinLeaveModalKind, JoinLeaveRoomModalAction, JoinLeaveRoomModalWidgetRefExt
     }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
@@ -144,6 +144,15 @@ script_mod! {
                                 width: Fill,
                                 align: Align{x: 0.5, y: 0.1},
                                 room_settings_modal_inner := RoomSettingsModal {}
+                            }
+                        }
+                        // A modal pane listing room members with search and actions.
+                        room_members_pane_modal := Modal {
+                            content +: {
+                                height: Fill,
+                                width: Fill,
+                                align: Align{x: 0.5, y: 0.1},
+                                room_members_pane_inner := RoomMembersPane {}
                             }
                         }
                         bot_binding_modal := Modal {
@@ -1603,6 +1612,43 @@ impl MatchEvent for App {
             // Handle RoomContextMenuAction::OpenRoomSettings.
             if let Some(RoomContextMenuAction::OpenRoomSettings(room_id)) = action.downcast_ref::<RoomContextMenuAction>() {
                 cx.action(RoomSettingsAction::Open { room_id: room_id.clone() });
+                continue;
+            }
+
+            // Handle RoomContextMenuAction::OpenRoomMembers.
+            if let Some(RoomContextMenuAction::OpenRoomMembers { room_id, room_name_id }) = action.downcast_ref::<RoomContextMenuAction>() {
+                cx.action(RoomMembersPaneAction::Open {
+                    room_id: room_id.clone(),
+                    room_name_id: room_name_id.clone(),
+                });
+                continue;
+            }
+
+            // Handle RoomMembersPaneAction (open/close/invite-from-pane).
+            match action.downcast_ref::<RoomMembersPaneAction>() {
+                Some(RoomMembersPaneAction::Open { room_id, room_name_id }) => {
+                    self.ui.room_members_pane(cx, ids!(room_members_pane_inner))
+                        .show(cx, room_id.clone(), room_name_id.clone());
+                    self.ui.modal(cx, ids!(room_members_pane_modal)).open(cx);
+                    continue;
+                }
+                Some(RoomMembersPaneAction::Close) => {
+                    self.ui.modal(cx, ids!(room_members_pane_modal)).close(cx);
+                    continue;
+                }
+                Some(RoomMembersPaneAction::InviteRequested { room_name_id }) => {
+                    cx.action(InviteModalAction::Open(room_name_id.clone()));
+                    continue;
+                }
+                None => {}
+            }
+
+            // Forward MembersPaneFetchedAction results into the open pane.
+            if let Some(fetched) = action.downcast_ref::<MembersPaneFetchedAction>() {
+                if let MembersPaneFetchedAction::Fetched { members, .. } = fetched {
+                    self.ui.room_members_pane(cx, ids!(room_members_pane_inner))
+                        .apply_members(cx, members.clone());
+                }
                 continue;
             }
 

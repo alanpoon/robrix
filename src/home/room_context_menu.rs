@@ -101,6 +101,11 @@ script_mod! {
                 text: "Invite"
             }
 
+            members_button := mod.widgets.RoomContextMenuButton {
+                draw_icon +: { svg: (ICON_SQUARES) }
+                text: "Members"
+            }
+
             bot_binding_button := mod.widgets.RoomContextMenuButton {
                 draw_icon +: { svg: (ICON_HIERARCHY) }
                 text: "Manage Bots"
@@ -140,6 +145,8 @@ pub struct RoomContextMenuDetails {
 pub enum RoomContextMenuAction {
     Notifications(OwnedRoomId),
     OpenRoomSettings(OwnedRoomId),
+    /// Open the standalone room members pane for the given room.
+    OpenRoomMembers { room_id: OwnedRoomId, room_name_id: RoomNameId },
     #[default]
     None,
 }
@@ -256,6 +263,13 @@ impl WidgetMatchEvent for RoomContextMenu {
         }
         else if self.button(cx, ids!(invite_button)).clicked(actions) {
             cx.action(InviteModalAction::Open(details.room_name_id.clone()));
+            close_menu = true;
+        }
+        else if self.button(cx, ids!(members_button)).clicked(actions) {
+            cx.action(RoomContextMenuAction::OpenRoomMembers {
+                room_id: details.room_name_id.room_id().clone(),
+                room_name_id: details.room_name_id.clone(),
+            });
             close_menu = true;
         }
         else if self.button(cx, ids!(bot_binding_button)).clicked(actions) {

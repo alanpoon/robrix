@@ -17,6 +17,7 @@ pub mod loading_pane;
 pub mod location_preview;
 pub mod main_desktop_ui;
 pub mod main_mobile_ui;
+pub mod room_members_pane;
 pub mod room_screen;
 pub mod room_read_receipt;
 pub mod rooms_list;
@@ -105,6 +106,7 @@ pub fn script_mod(vm: &mut ScriptVm) {
     event_source_modal::script_mod(vm);
     room_context_menu::script_mod(vm);
     room_settings_modal::script_mod(vm);
+    room_members_pane::script_mod(vm);
     invite_modal::script_mod(vm);
     invite_screen::script_mod(vm);
     tombstone_footer::script_mod(vm);

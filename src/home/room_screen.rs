@@ -11413,6 +11413,68 @@ pub enum InviteResultAction {
     },
 }
 
+/// Result of [`MatrixRequest::FetchMembersForPane`].
+///
+/// The `is_partial` flag in `Fetched` is `true` if the result came from the
+/// local cache (delivered first for fast paint); a second `Fetched` action with
+/// `is_partial: false` will arrive once the server response is processed.
+#[derive(Debug)]
+pub enum MembersPaneFetchedAction {
+    Fetched {
+        room_id: OwnedRoomId,
+        members: Arc<Vec<matrix_sdk::room::RoomMember>>,
+        is_partial: bool,
+    },
+    Failed {
+        room_id: OwnedRoomId,
+        error: matrix_sdk::Error,
+    },
+}
+
+/// Identifies which member-management action a result corresponds to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberActionKind {
+    Kick,
+    Ban,
+    Unban,
+}
+
+impl MemberActionKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MemberActionKind::Kick => "kick",
+            MemberActionKind::Ban => "ban",
+            MemberActionKind::Unban => "unban",
+        }
+    }
+}
+
+/// The result of a member-management action (kick / ban / unban).
+///
+/// Dispatched in response to [`MatrixRequest::KickUser`], [`MatrixRequest::BanUser`],
+/// or [`MatrixRequest::UnbanUser`].
+#[derive(Debug)]
+pub enum MemberActionResultAction {
+    Kicked {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+    },
+    Banned {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+    },
+    Unbanned {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+    },
+    Failed {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+        kind: MemberActionKind,
+        error: matrix_sdk::Error,
+    },
+}
+
 /// The result of reporting a room.
 #[derive(Debug)]
 pub enum ReportRoomResultAction {
