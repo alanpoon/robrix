@@ -739,6 +739,8 @@ pub enum AccountDataAction {
         device_id: String,
         outcome: DeviceDeleteOutcome,
     },
+    /// Result of [`MatrixRequest::ChangePassword`].
+    ChangePasswordResult(ChangePasswordOutcome),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -771,6 +773,24 @@ pub enum DeviceDeleteOutcome {
     /// auth flow stage the server picked first.
     NeedsAuth { fallback_url: String },
     /// Anything else (network error, 403, server bug, …).
+    Error(String),
+}
+
+/// Outcome of attempting to change the account password.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChangePasswordOutcome {
+    /// New password accepted.
+    Success,
+    /// The current password was wrong (server re-issued a UIA challenge
+    /// after we sent credentials).
+    WrongCurrentPassword,
+    /// The new password didn't meet the server's strength requirements.
+    /// `msg` is the homeserver's explanation.
+    WeakPassword(String),
+    /// The homeserver doesn't support password authentication for this
+    /// account (OIDC-backed account, SSO-only, …).
+    NotSupported,
+    /// Network / server / parse error.
     Error(String),
 }
 
@@ -1194,6 +1214,12 @@ pub enum MatrixRequest {
     /// Request to delete one device from the user's account. Response:
     /// [`AccountDataAction::DeviceDeleteResult`] in all cases.
     DeleteDevice { device_id: String },
+    /// Request to change the account password. Performs the two-call UIA
+    /// dance internally. Response: [`AccountDataAction::ChangePasswordResult`].
+    ChangePassword {
+        current_password: String,
+        new_password: String,
+    },
     /// Request to fetch an Avatar image from the server.
     /// Upon completion of the async media request, the `on_fetched` function
     /// will be invoked with the content of an `AvatarUpdate`.
@@ -3538,6 +3564,99 @@ async fn matrix_worker_task(
                             ));
                         }
                     }
+                });
+            }
+
+            MatrixRequest::ChangePassword { current_password, new_password } => {
+                let Some(client) = get_client() else { continue };
+                let _change_password_task = Handle::current().spawn(async move {
+                    use matrix_sdk::ruma::api::client::uiaa::{
+                        AuthData, MatrixUserIdentifier, Password, UserIdentifier,
+                    };
+
+                    // 1st call — no auth. Server returns 401 UIA with a session.
+                    let first = client.account().change_password(&new_password, None).await;
+                    let session = match &first {
+                        Ok(_) => {
+                            // The server accepted the new password without UIA
+                            // (rare but allowed by spec). We're done.
+                            Cx::post_action(AccountDataAction::ChangePasswordResult(
+                                ChangePasswordOutcome::Success,
+                            ));
+                            return;
+                        }
+                        Err(e) => {
+                            // We *want* a UIA challenge here. Anything else
+                            // means the server doesn't support password auth
+                            // or returned a hard error.
+                            match e.as_uiaa_response() {
+                                Some(uiaa) => match &uiaa.session {
+                                    Some(s) => s.clone(),
+                                    None => {
+                                        Cx::post_action(
+                                            AccountDataAction::ChangePasswordResult(
+                                                ChangePasswordOutcome::Error(
+                                                    "Homeserver returned UIA without a session"
+                                                        .to_string(),
+                                                ),
+                                            ),
+                                        );
+                                        return;
+                                    }
+                                },
+                                None => {
+                                    Cx::post_action(AccountDataAction::ChangePasswordResult(
+                                        ChangePasswordOutcome::NotSupported,
+                                    ));
+                                    return;
+                                }
+                            }
+                        }
+                    };
+
+                    // 2nd call — same request, this time with the user's
+                    // current password attached to the UIA session.
+                    let Some(session_meta) = client.session_meta() else {
+                        Cx::post_action(AccountDataAction::ChangePasswordResult(
+                            ChangePasswordOutcome::Error("Not signed in".to_string()),
+                        ));
+                        return;
+                    };
+                    let identifier = UserIdentifier::Matrix(MatrixUserIdentifier::new(
+                        session_meta.user_id.to_string(),
+                    ));
+                    let mut pw_auth = Password::new(identifier, current_password);
+                    pw_auth.session = Some(session);
+
+                    let second = client
+                        .account()
+                        .change_password(&new_password, Some(AuthData::Password(pw_auth)))
+                        .await;
+
+                    let outcome = match second {
+                        Ok(_) => {
+                            log!("Password changed successfully.");
+                            ChangePasswordOutcome::Success
+                        }
+                        Err(e) => {
+                            // If the server replies with another UIA challenge
+                            // after we provided credentials, that means our
+                            // current password was rejected.
+                            if e.as_uiaa_response().is_some() {
+                                ChangePasswordOutcome::WrongCurrentPassword
+                            } else if let Some(kind) = e.client_api_error_kind() {
+                                use matrix_sdk::ruma::api::client::error::ErrorKind;
+                                if matches!(kind, ErrorKind::WeakPassword) {
+                                    ChangePasswordOutcome::WeakPassword(e.to_string())
+                                } else {
+                                    ChangePasswordOutcome::Error(e.to_string())
+                                }
+                            } else {
+                                ChangePasswordOutcome::Error(e.to_string())
+                            }
+                        }
+                    };
+                    Cx::post_action(AccountDataAction::ChangePasswordResult(outcome));
                 });
             }
 

@@ -1,6 +1,7 @@
 use makepad_widgets::ScriptVm;
 
 pub mod settings_screen;
+pub mod account_management_modal;
 pub mod account_settings;
 pub mod app_preferences;
 pub mod app_settings;
@@ -13,6 +14,7 @@ pub fn script_mod(vm: &mut ScriptVm) {
     app_settings::script_mod(vm);
     bot_settings::script_mod(vm);
     devices_settings::script_mod(vm);
+    account_management_modal::script_mod(vm);
     translation_settings::script_mod(vm);
     settings_screen::script_mod(vm);
 }

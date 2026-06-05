@@ -850,13 +850,7 @@ impl MatchEvent for AccountSettings {
         }
 
         if self.view.button(cx, ids!(manage_account_button)).clicked(actions) {
-            // TODO: support opening the user's account management page in a browser,
-            //       or perhaps in an in-app pane if that's what is needed for regular UN+PW login.
-            enqueue_popup_notification(
-                tr_key(self.app_language, "settings.account.popup.account_management_not_implemented"),
-                PopupKind::Warning,
-                Some(4.0),
-            );
+            cx.action(crate::settings::account_management_modal::AccountManagementAction::Open);
         }
 
         if self.view.button(cx, ids!(logout_button)).clicked(actions) {

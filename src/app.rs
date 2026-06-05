@@ -24,7 +24,12 @@ use crate::{
     }, login::login_screen::LoginAction, logout::logout_confirm_modal::{LogoutAction, LogoutConfirmModalAction, LogoutConfirmModalWidgetRefExt}, persistence, profile::user_profile_cache::clear_user_profile_cache, register::RegisterAction, room::BasicRoomDetails, shared::{confirmation_modal::{ConfirmationModalContent, ConfirmationModalWidgetRefExt}, file_upload_modal::{FilePreviewerAction, FileUploadModalWidgetRefExt}, forward_modal::{ForwardMessageModalAction, ForwardMessageModalWidgetRefExt}, image_viewer::{ImageViewerAction, LoadState}, popup_list::{PopupKind, enqueue_popup_notification}, room_filter_input_bar::FilterAction}, sliding_sync::{DirectMessageRoomAction, MatrixRequest, RemoteDirectorySearchKind, RemoteDirectorySearchResult, RoomSettingsFetchedAction, RoomAvatarUploadedAction, TimelineKind, AccountSwitchAction, current_user_id, get_client, submit_async_request, get_timeline_update_sender}, updater::{UpdateCheckOutcome, check_for_updates, load_skipped_update_version, save_skipped_update_version, update_release_page_url}, utils::RoomNameId, verification::VerificationAction, verification_modal::{
         VerificationModalAction,
         VerificationModalWidgetRefExt,
-    }, settings::app_preferences::{AppPreferences, AppPreferencesAction, UiZoom}
+    }, settings::{
+        account_management_modal::{
+            AccountManagementAction, AccountManagementModalWidgetRefExt,
+        },
+        app_preferences::{AppPreferences, AppPreferencesAction, UiZoom},
+    }
 };
 use crate::shared::room_filter_search_results::{RoomFilterResultAction, RoomFilterResultTarget};
 use crate::shared::room_filter_search_results::RoomFilterSearchResultsListWidgetRefExt;
@@ -253,6 +258,13 @@ script_mod! {
                         logout_confirm_modal := Modal {
                             content +: {
                                 logout_confirm_modal_inner := LogoutConfirmModal {}
+                            }
+                        }
+
+                        // Account Management modal: user info, password, devices.
+                        account_management_modal := Modal {
+                            content +: {
+                                account_management_modal_inner := AccountManagementModal {}
                             }
                         }
 
@@ -876,6 +888,21 @@ impl MatchEvent for App {
                     }
                     continue;
                 },
+                _ => {}
+            }
+
+            match action.downcast_ref() {
+                Some(AccountManagementAction::Open) => {
+                    self.ui
+                        .account_management_modal(cx, ids!(account_management_modal_inner))
+                        .reset();
+                    self.ui.modal(cx, ids!(account_management_modal)).open(cx);
+                    continue;
+                }
+                Some(AccountManagementAction::Close) => {
+                    self.ui.modal(cx, ids!(account_management_modal)).close(cx);
+                    continue;
+                }
                 _ => {}
             }
 
