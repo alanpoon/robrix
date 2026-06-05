@@ -1,4 +1,5 @@
 #![recursion_limit = "256"]
+#![cfg_attr(test, allow(dead_code))]
 
 use std::{path::Path, sync::OnceLock};
 
@@ -68,6 +69,8 @@ mod event_preview;
 pub mod room;
 /// VoIP call screen and related functionality.
 pub mod voip;
+/// Hand-gesture robot-arm-car control: webcam → tract ONNX hand model → HTTP POST.
+pub mod gesture_control;
 
 
 /// All content related to TSP (Trust Spanning Protocol) wallets/identities.

@@ -76,6 +76,18 @@ serde_json = "1.0"
 thiserror = "2.0.16"
 tokio = { version = "1.43.1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = "0.3.17"
+## Hand-gesture robot control: pure-Rust ONNX inference for the Robot tab.
+## The dep is kept lightweight (no nnef / no parser bonuses) since the hand
+## model loader is stubbed until canonical ONNX URLs land — switch back to
+## default features once `hand_model.rs` actually calls `tract_onnx::onnx()`.
+tract-onnx = { version = "0.21", default-features = false }
+sha2 = "0.10"
+
+## Objective-C runtime for the parallel AVFoundation video capture used by
+## the Robot tab on macOS. Same major version as the one Makepad already
+## pulls transitively, so no duplicate compilation.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
 unicode-segmentation = "1.11.0"
 url = "2.5.0"
 

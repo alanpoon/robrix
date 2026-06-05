@@ -1,0 +1,101 @@
+//! Hand-gesture robot-arm-car control.
+//!
+//! Captures the local webcam, runs a two-stage hand-landmark ONNX pipeline
+//! (palm detection → 21 hand landmarks) on a background thread via `tract`,
+//! classifies the landmarks into one of six discrete gestures, and emits
+//! both an in-app [`GestureAction`] and an HTTP POST to a user-configured
+//! robotic-arm-car endpoint on the local network.
+//!
+//! Target platforms: desktop (macOS / Linux / Windows) and Android. Web is
+//! explicitly out of scope.
+//!
+//! See `specs/task-gesture-robot-control.spec.md` for the full contract.
+
+pub mod gesture_classifier;
+pub mod robot_http;
+pub mod model_downloader;
+pub mod hand_model;
+pub mod inference_worker;
+pub mod gesture_webcam_view;
+pub mod robot_control_panel;
+pub mod robot_screen;
+pub mod camera_capture;
+#[cfg(target_os = "macos")]
+pub mod avf_capture;
+pub mod frame_analyzer;
+
+/// The six discrete gesture actions the classifier can emit, plus `None`
+/// for "no recognized gesture this frame".
+///
+/// These are emitted on Makepad's action bus by `RobotScreen` once per debounced
+/// detection, and also drive the HTTP POST body (`{"action": "forward"}` etc.).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum GestureAction {
+    /// No gesture detected this frame, or below confidence threshold.
+    #[default]
+    None,
+    /// Index finger pointing up.
+    Forward,
+    /// Index finger pointing down.
+    Back,
+    /// Index finger pointing to the user's left (after mirror correction).
+    Left,
+    /// Index finger pointing to the user's right (after mirror correction).
+    Right,
+    /// Closed fist (no fingers extended).
+    Catch,
+    /// Open palm (all five fingers extended).
+    Drop,
+}
+
+impl GestureAction {
+    /// Lowercase wire name used as the `"action"` value in the HTTP JSON body.
+    /// Returns `None` for `GestureAction::None` — callers should not send a
+    /// request when no gesture is detected.
+    pub fn wire_name(self) -> Option<&'static str> {
+        match self {
+            GestureAction::None => None,
+            GestureAction::Forward => Some("forward"),
+            GestureAction::Back => Some("back"),
+            GestureAction::Left => Some("left"),
+            GestureAction::Right => Some("right"),
+            GestureAction::Catch => Some("catch"),
+            GestureAction::Drop => Some("drop"),
+        }
+    }
+
+    /// Short human-readable label for the UI (`Last gesture: …`).
+    pub fn display_label(self) -> &'static str {
+        match self {
+            GestureAction::None => "—",
+            GestureAction::Forward => "Forward",
+            GestureAction::Back => "Back",
+            GestureAction::Left => "Left",
+            GestureAction::Right => "Right",
+            GestureAction::Catch => "Catch",
+            GestureAction::Drop => "Drop",
+        }
+    }
+
+    /// Single-glyph icon used in the on-video overlay pill. Big-text-friendly.
+    pub fn icon(self) -> &'static str {
+        match self {
+            GestureAction::None => "—",
+            GestureAction::Forward => "▲",
+            GestureAction::Back => "▼",
+            GestureAction::Left => "◀",
+            GestureAction::Right => "▶",
+            GestureAction::Catch => "✊",
+            GestureAction::Drop => "🖐",
+        }
+    }
+}
+
+/// Register all `script_mod!` widgets that belong to this module.
+///
+/// Called from `App::register_widgets()` in `src/app.rs`.
+pub fn script_mod(vm: &mut makepad_widgets::ScriptVm) {
+    gesture_webcam_view::script_mod(vm);
+    robot_control_panel::script_mod(vm);
+    robot_screen::script_mod(vm);
+}

@@ -10,7 +10,7 @@ use crate::{
     persistence,
     sliding_sync::{AccountSwitchAction, current_user_id, get_client},
     utils::RoomNameId,
-    voip::{VoipAction, VoipGlobalState, VoipScreenWidgetRefExt},
+    voip::{CameraConsumer, VoipAction, VoipGlobalState, VoipScreenWidgetRefExt},
 };
 use super::{invite_screen::InviteScreenWidgetRefExt, room_screen::RoomScreenWidgetRefExt, rooms_list::RoomsListAction};
 
@@ -49,7 +49,7 @@ script_mod! {
             }
 
             main_tabs := DockTabs{
-                tabs: [@home_tab]
+                tabs: [@home_tab, @robot_tab]
                 selected: 0
             }
 
@@ -64,6 +64,12 @@ script_mod! {
                 template: @PermanentTab
             }
 
+            robot_tab := DockTab{
+                name: "Robot"
+                kind: @robot_screen
+                template: @PermanentTab
+            }
+
             // Below are the templates of widgets that can be created within dock tabs.
             rooms_sidebar := mod.widgets.RoomsSideBar {}
             welcome_screen := mod.widgets.WelcomeScreen {}
@@ -71,6 +77,7 @@ script_mod! {
             invite_screen := mod.widgets.InviteScreen {}
             space_lobby_screen := mod.widgets.SpaceLobbyScreen {}
             voip_screen := mod.widgets.VoipScreen {}
+            robot_screen := mod.widgets.RobotScreen {}
         }
     }
 }
@@ -533,6 +540,19 @@ impl WidgetMatchEvent for MainDesktopUI {
                             cx.action(VoipAction::ShowPip { room_id: room_id.clone() });
                         }
                     }
+
+                    // Camera handoff: tell whichever screen is the new tab's
+                    // owner that it has the camera; tabs that don't use the
+                    // camera fire `Idle` so any previous holder (Robot tab,
+                    // VoIP lobby) releases it.
+                    let new_consumer = if tab_id == id!(robot_tab) {
+                        CameraConsumer::Robot
+                    } else if matches!(&new_room, Some(SelectedRoom::Voip { .. })) {
+                        CameraConsumer::VoipLobby
+                    } else {
+                        CameraConsumer::Idle
+                    };
+                    VoipGlobalState::acquire_camera_for(cx, new_consumer);
 
                     if tab_id == id!(home_tab) {
                         cx.action(AppStateAction::FocusNone);

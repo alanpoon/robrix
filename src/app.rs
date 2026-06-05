@@ -765,6 +765,7 @@ impl MatchEvent for App {
                 AppPreferencesAction::ViewModeChanged(_)
                 | AppPreferencesAction::SendOnEnterChanged(_)
                 | AppPreferencesAction::UiZoomChanged(_)
+                | AppPreferencesAction::RobotControlIpChanged(_)
             ) = action.downcast_ref() {
                 if let Some(user_id) = current_user_id() {
                     if let Err(e) = persistence::save_app_state(self.app_state.clone(), user_id) {
@@ -1837,6 +1838,7 @@ impl AppMain for App {
         crate::profile::script_mod(vm);
         crate::voip::voip_screen::script_mod(vm);
         crate::voip::pip_overlay::script_mod(vm);
+        crate::gesture_control::script_mod(vm);
         crate::home::script_mod(vm);
         crate::login::script_mod(vm);
         crate::register::script_mod(vm);
