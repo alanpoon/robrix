@@ -1,13 +1,14 @@
 //! ONNX model download + SHA-256 verification.
 //!
-//! Both ONNX files live under `<app_data_dir>/models/`. On startup of the
-//! Robot tab we check that both files exist and match their pinned SHA-256.
-//! If either is missing or corrupt we fetch the canonical copy from
+//! The hand-landmark ONNX file lives under `<app_data_dir>/models/`. On
+//! startup of the Robot tab we check the file exists and matches its pinned
+//! SHA-256. If it's missing or corrupt we fetch the canonical copy from
 //! [`MODEL_BASE_URL`] over `matrix_sdk::reqwest`.
 //!
-//! Both `MODEL_BASE_URL` and the per-file SHA-256 constants are intentionally
-//! left empty until the canonical model files are pinned in the spec — the
-//! runtime check is implemented and ready to use once the URL is filled in.
+//! This is currently a **single-stage landmark-only** pipeline: the original
+//! two-stage spec (palm-detection → landmark with rotated ROI) is deferred.
+//! The landmark model is fed a center-square crop of the webcam frame and
+//! produces 21 landmarks plus a hand-presence score directly.
 
 use std::path::PathBuf;
 
@@ -17,43 +18,37 @@ use matrix_sdk::reqwest;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
-/// Filename of the palm-detection ONNX model on disk and in the URL.
-pub const PALM_DETECTION_FILENAME: &str = "palm_detection_lite.onnx";
 /// Filename of the hand-landmark ONNX model on disk and in the URL.
-pub const HAND_LANDMARK_FILENAME: &str = "hand_landmark_lite.onnx";
+///
+/// This is the OpenCV Zoo MediaPipe Hands port (input NHWC f32 [1,224,224,3],
+/// outputs [1,63] landmarks in 224-px space, [1,1] hand-presence score,
+/// [1,1] handedness, [1,63] world landmarks).
+pub const HAND_LANDMARK_FILENAME: &str = "handpose_estimation_mediapipe_2023feb.onnx";
 
-/// Base URL the two models are fetched from. Files live at
-/// `{MODEL_BASE_URL}/{filename}`. Empty until the canonical hosting location
-/// is pinned — leaving this empty makes [`ensure_downloaded`] return a
-/// "model URL not configured" error so the UI can show a clear message
-/// instead of silently failing.
-pub const MODEL_BASE_URL: &str = "";
+/// Base URL the model is fetched from. The full URL is `{MODEL_BASE_URL}/{filename}`.
+pub const MODEL_BASE_URL: &str =
+    "https://github.com/opencv/opencv_zoo/raw/main/models/handpose_estimation_mediapipe";
 
-/// Expected SHA-256 of each model file (hex-encoded, lowercase, 64 chars).
-/// Empty strings disable verification — only intended for the bootstrap phase.
-pub const PALM_DETECTION_SHA256: &str = "";
-pub const HAND_LANDMARK_SHA256: &str = "";
+/// Expected SHA-256 of the landmark file (hex-encoded, lowercase, 64 chars).
+/// Empty string disables verification.
+pub const HAND_LANDMARK_SHA256: &str =
+    "db0898ae717b76b075d9bf563af315b29562e11f8df5027a1ef07b02bef6d81c";
 
 /// Directory under `app_data_dir` where ONNX files live.
 pub fn models_dir() -> PathBuf {
     crate::app_data_dir().join("models")
 }
 
-pub fn palm_detection_path() -> PathBuf {
-    models_dir().join(PALM_DETECTION_FILENAME)
-}
-
 pub fn hand_landmark_path() -> PathBuf {
     models_dir().join(HAND_LANDMARK_FILENAME)
 }
 
-/// True if both ONNX files are on disk and match their pinned SHA-256.
+/// True if the landmark ONNX file is on disk and matches its pinned SHA-256.
 ///
-/// If a SHA-256 constant is empty, we only check file presence (bootstrap
-/// mode for when URLs/hashes haven't been pinned yet).
-pub fn both_models_present_and_valid() -> bool {
-    file_valid(&palm_detection_path(), PALM_DETECTION_SHA256)
-        && file_valid(&hand_landmark_path(), HAND_LANDMARK_SHA256)
+/// If the SHA-256 constant is empty, we only check file presence (bootstrap
+/// mode for when the hash hasn't been pinned).
+pub fn landmark_model_present_and_valid() -> bool {
+    file_valid(&hand_landmark_path(), HAND_LANDMARK_SHA256)
 }
 
 fn file_valid(path: &std::path::Path, expected_sha: &str) -> bool {
@@ -95,8 +90,8 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-/// Ensure both ONNX files are present and valid on disk, downloading any that
-/// are missing or corrupt. Async; suitable for calling from the inference
+/// Ensure the landmark ONNX file is present and valid on disk, downloading it
+/// if missing or corrupt. Async; suitable for calling from the inference
 /// worker's bootstrap path or a "Download model" button handler.
 pub async fn ensure_downloaded() -> Result<()> {
     if MODEL_BASE_URL.is_empty() {
@@ -110,17 +105,11 @@ pub async fn ensure_downloaded() -> Result<()> {
         .with_context(|| format!("create dir {}", models_dir().display()))?;
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        // GitHub LFS redirect → S3 can take longer than a typical small file.
+        .timeout(std::time::Duration::from_secs(60))
         .build()
         .context("build reqwest client")?;
 
-    download_if_invalid(
-        &client,
-        PALM_DETECTION_FILENAME,
-        PALM_DETECTION_SHA256,
-        &palm_detection_path(),
-    )
-    .await?;
     download_if_invalid(
         &client,
         HAND_LANDMARK_FILENAME,

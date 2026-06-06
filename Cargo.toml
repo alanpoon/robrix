@@ -77,10 +77,8 @@ thiserror = "2.0.16"
 tokio = { version = "1.43.1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = "0.3.17"
 ## Hand-gesture robot control: pure-Rust ONNX inference for the Robot tab.
-## The dep is kept lightweight (no nnef / no parser bonuses) since the hand
-## model loader is stubbed until canonical ONNX URLs land — switch back to
-## default features once `hand_model.rs` actually calls `tract_onnx::onnx()`.
-tract-onnx = { version = "0.21", default-features = false }
+## Default features include the ONNX parser used by `hand_model::HandModel::load`.
+tract-onnx = "0.21"
 sha2 = "0.10"
 
 ## Objective-C runtime for the parallel AVFoundation video capture used by

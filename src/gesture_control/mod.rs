@@ -1,7 +1,8 @@
 //! Hand-gesture robot-arm-car control.
 //!
-//! Captures the local webcam, runs a two-stage hand-landmark ONNX pipeline
-//! (palm detection → 21 hand landmarks) on a background thread via `tract`,
+//! Captures the local webcam, runs a single-stage 21-point hand-landmark ONNX
+//! model on a background thread via `tract` (center-square crop of the source
+//! frame fed straight to the landmark model — palm-detection stage deferred),
 //! classifies the landmarks into one of six discrete gestures, and emits
 //! both an in-app [`GestureAction`] and an HTTP POST to a user-configured
 //! robotic-arm-car endpoint on the local network.

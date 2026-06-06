@@ -18,7 +18,7 @@ use makepad_widgets::video::VideoCameraPreviewMode;
 
 use crate::gesture_control::{
     GestureAction,
-    frame_analyzer,
+    inference_worker::InferenceWorker,
     robot_http::{HttpOutcome, RobotHttpSender, validate_ip},
 };
 
@@ -326,6 +326,12 @@ pub struct RobotScreen {
     /// Most recent RGBA frame received from the worker. Reused by the
     /// "Infer gesture" button — we never re-grab from the camera on click.
     #[rust] latest_frame: Option<WebRtcVideoFrame>,
+    /// Hand-landmark ONNX inference worker. `Some` once the model has been
+    /// successfully loaded; `None` if load failed or hasn't been attempted.
+    #[rust] inference: Option<InferenceWorker>,
+    /// Set once we've tried to load the model and failed — keeps us from
+    /// re-attempting load on every click.
+    #[rust] inference_load_failed: bool,
 }
 
 const MAX_RECENT_LINES: usize = 8;
@@ -356,6 +362,7 @@ impl Widget for RobotScreen {
             self.refresh_green_window(cx);
             self.refresh_overlay_visibility(cx);
             self.pump_camera_frames(cx);
+            self.pump_inference_results(cx);
         }
 
         self.view.handle_event(cx, event, scope);
@@ -606,12 +613,13 @@ impl RobotScreen {
     /// Run a one-shot gesture inference against the most recently received
     /// webcam frame.
     ///
-    /// The current implementation runs the skin-color centroid heuristic in
-    /// `frame_analyzer::classify_frame`. It returns a `GestureAction` based on
-    /// where the largest skin-tone blob sits in the frame and what shape its
-    /// bounding box has. This is *not* hand-landmark ML — but it responds to
-    /// actual hand position and is the wired-in seam for when a real
-    /// `hand_model::run` + `gesture_classifier::classify` chain replaces it.
+    /// Submits the latest frame to the background `InferenceWorker`. The
+    /// worker runs the hand-landmark ONNX model (single-stage, center-crop)
+    /// and pushes a result on its result channel; `pump_inference_results`
+    /// drains that channel on each `NextFrame` and updates the UI.
+    ///
+    /// On the user side this still looks one-shot: press the button, see the
+    /// label update on the next frame tick.
     fn infer_gesture(&mut self, cx: &mut Cx) {
         if !self.camera_running {
             self.view
@@ -620,7 +628,7 @@ impl RobotScreen {
             self.view.redraw(cx);
             return;
         }
-        let Some(frame) = self.latest_frame.as_ref() else {
+        let Some(frame) = self.latest_frame.clone() else {
             self.view
                 .label(cx, ids!(inference_value))
                 .set_text(cx, "(no frame yet)");
@@ -628,19 +636,60 @@ impl RobotScreen {
             return;
         };
 
-        match frame_analyzer::classify_frame(frame) {
-            Some(action) => {
-                log!("RobotScreen: inferred gesture: {action:?}");
-                self.view
-                    .label(cx, ids!(inference_value))
-                    .set_text(cx, action.display_label());
-                self.emit_gesture(cx, action);
+        // Lazy-load the model on first click so a model-file failure shows up
+        // as a one-time "(model unavailable)" rather than blocking tab open.
+        if self.inference.is_none() && !self.inference_load_failed {
+            match InferenceWorker::spawn() {
+                Ok(w) => self.inference = Some(w),
+                Err(e) => {
+                    log!("RobotScreen: hand-model load failed: {e:#}");
+                    self.inference_load_failed = true;
+                }
             }
-            None => {
+        }
+
+        let Some(worker) = self.inference.as_ref() else {
+            self.view
+                .label(cx, ids!(inference_value))
+                .set_text(cx, "(model unavailable)");
+            self.view.redraw(cx);
+            return;
+        };
+
+        if worker.submit(frame) {
+            self.view
+                .label(cx, ids!(inference_value))
+                .set_text(cx, "(inferring…)");
+            self.view.redraw(cx);
+        }
+        // If submit returned false the worker is still busy with the previous
+        // frame; the next NextFrame will deliver that result anyway.
+    }
+
+    /// Drain any inference results delivered by the background worker, update
+    /// the inference label, and emit any recognized gesture.
+    fn pump_inference_results(&mut self, cx: &mut Cx) {
+        let results: Vec<_> = {
+            let Some(worker) = self.inference.as_ref() else { return };
+            std::iter::from_fn(|| worker.try_recv()).collect()
+        };
+        for result in results {
+            if matches!(result.detected, GestureAction::None) {
+                let text = if result.landmarks.is_some() {
+                    "(no gesture)"
+                } else {
+                    "(no hand detected)"
+                };
                 self.view
                     .label(cx, ids!(inference_value))
-                    .set_text(cx, "(no hand detected)");
+                    .set_text(cx, text);
                 self.view.redraw(cx);
+            } else {
+                log!("RobotScreen: inferred gesture: {:?}", result.detected);
+                self.view
+                    .label(cx, ids!(inference_value))
+                    .set_text(cx, result.detected.display_label());
+                self.emit_gesture(cx, result.detected);
             }
         }
     }
