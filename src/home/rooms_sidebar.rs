@@ -117,6 +117,21 @@ script_mod! {
                 }
             }
 
+            // Mobile-only Robot tab entry. Desktop has a permanent DockTab, but
+            // mobile uses StackNavigation, so we expose the screen as a list-row
+            // sitting just above the rooms list. Tapping it pushes `robot_view`
+            // onto the StackNavigation (handled in `app.rs`).
+            btn_open_robot := Button {
+                text: "🤖  Robot"
+                width: Fill, height: 44
+                margin: Inset{left: 15, right: 15, top: 4, bottom: 4}
+                draw_bg +: { color: (COLOR_PRIMARY_DARKER), border_radius: 6.0 }
+                draw_text +: {
+                    color: #x202020
+                    text_style: theme.font_bold { font_size: 14.0 }
+                }
+            }
+
             View {
                 padding: Inset{left: 15, right: 15}
 
@@ -126,6 +141,14 @@ script_mod! {
             }
         }
     }
+}
+
+/// Emitted by the Mobile `RoomsSideBar` when the user taps the "Robot" row.
+/// The top-level `App` listens for this and pushes `robot_view` onto the
+/// mobile StackNavigation.
+#[derive(Clone, Debug)]
+pub enum RobotEntryAction {
+    Open,
 }
 
 /// A simple wrapper around `AdaptiveView` that contains several global singleton widgets.
@@ -175,6 +198,12 @@ impl Widget for RoomsSideBar {
                         self.view.redraw(cx);
                     }
                 }
+            }
+            // The Mobile variant of this widget hosts a "Robot" entry button
+            // that opens the gesture-control screen. Desktop has the same
+            // screen as a permanent DockTab so it doesn't need this button.
+            if self.view.button(cx, ids!(btn_open_robot)).clicked(actions) {
+                cx.action(RobotEntryAction::Open);
             }
         }
         self.view.handle_event(cx, event, scope);

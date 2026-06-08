@@ -40,90 +40,25 @@ script_mod! {
 
     mod.widgets.RobotScreen = #(RobotScreen::register_widget(vm)) {
         width: Fill, height: Fill
-        flow: Right
+        // Stack vertically (preview on top, control panel below) so the layout
+        // works on narrow mobile screens. Side-by-side flow:Right with the
+        // fixed 300dp panel degenerates the preview to a sliver on phones
+        // (~24dp wide after padding/spacing) and stalls Makepad's shadow
+        // shader during the StackNavigation push animation.
+        flow: Down
         show_bg: true
         draw_bg.color: (COLOR_PRIMARY)
         padding: Inset{top: 12, bottom: 12, left: 12, right: 12}
         spacing: 12
 
-        // ── Left: webcam preview (placeholder) + gesture overlay ─────────
-        // Overlay flow stacks children — placeholder/video on the bottom,
-        // gesture pill floats on top.
-        //
-        // Both child layers are explicit Views with `width: Fill, height: Fill`
-        // so the Overlay-flow parent's height isn't pulled down to the natural
-        // height of a single Label's text. (Bare `Label { height: Fill }` was
-        // collapsing the parent to ~60 px tall in earlier screenshots.)
-        preview_col := RoundedView {
+        // Single control panel wrapped in a vertical scroll view so the
+        // contents (IP entry, status, gestures, D-pad, recent log) can
+        // overflow the viewport on phones without clipping. The panel
+        // itself is `height: Fill` so it claims the full RobotScreen body;
+        // its children stack with their natural heights and become
+        // scrollable when their sum exceeds Fill.
+        panel_col := ScrollYView {
             width: Fill, height: Fill
-            flow: Overlay
-            show_bg: true
-            draw_bg +: { color: #x1a1a1a, border_radius: 8.0 }
-
-            // Layer 0a — live camera preview.
-            // Display uses Makepad's native `Video` widget in Native preview
-            // mode (camera → GPU directly). Inference frames come through a
-            // separate `cx.camera_frame_input(0, …)` callback registered in
-            // `camera_capture.rs` — same camera, parallel pixel path.
-            preview_video := Video {
-                width: Fill, height: Fill
-                visible: false
-            }
-
-            // Layer 0b — placeholder / "camera off" message.
-            placeholder_layer := View {
-                width: Fill, height: Fill
-                align: Align{x: 0.5, y: 0.5}
-
-                preview_placeholder := Label {
-                    text: "Camera offline\n(click \"Open camera\" to start)"
-                    align: Align{x: 0.5, y: 0.5}
-                    draw_text +: {
-                        color: #x808080
-                        text_style: theme.font_regular { font_size: 14.0 }
-                    }
-                }
-            }
-
-            // Layer 1 — gesture overlay pill, centered. Visibility toggled
-            // from Rust on each `emit_gesture`.
-            gesture_overlay_layer := View {
-                width: Fill, height: Fill
-                align: Align{x: 0.5, y: 0.5}
-
-                gesture_overlay_pill := RoundedView {
-                    visible: false
-                    width: Fit, height: Fit
-                    flow: Down
-                    align: Align{x: 0.5, y: 0.5}
-                    show_bg: true
-                    draw_bg +: { color: #x000000DD, border_radius: 14.0 }
-                    padding: Inset{top: 14, bottom: 14, left: 28, right: 28}
-                    spacing: 4
-
-                    gesture_overlay_icon := Label {
-                        text: "—"
-                        align: Align{x: 0.5, y: 0.5}
-                        draw_text +: {
-                            color: #xFFFFFF
-                            text_style: theme.font_bold { font_size: 56.0 }
-                        }
-                    }
-                    gesture_overlay_label := Label {
-                        text: ""
-                        align: Align{x: 0.5, y: 0.5}
-                        draw_text +: {
-                            color: #xFFFFFF
-                            text_style: theme.font_bold { font_size: 18.0 }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── Right: control panel ─────────────────────────────────────────
-        panel_col := View {
-            width: 300, height: Fill
             flow: Down
             spacing: 10
 
@@ -135,18 +70,88 @@ script_mod! {
                 }
             }
 
-            // IP row
-            ip_label := Label {
-                text: "Robot IP"
-                draw_text +: {
-                    color: #x404040
-                    text_style: theme.font_regular { font_size: 12.0 }
-                }
-            }
-            robot_ip_input := RobrixTextInput {
+            // Top row — Robot IP entry on the left, live webcam thumbnail on
+            // the right. `top_left_col` is `width: Fill` so it consumes
+            // whatever horizontal space the fixed-width webcam leaves over.
+            // The IP input itself is fixed at 200dp so it stays "short"
+            // even if the column gets wider, which matches the desktop
+            // layout intent.
+            top_row := View {
                 width: Fill, height: Fit
-                empty_text: "192.168.4.1"
-                padding: Inset{top: 6, bottom: 6, left: 10, right: 10}
+                flow: Right
+                align: Align{y: 0.0}
+                spacing: 12
+
+                top_left_col := View {
+                    width: Fill, height: Fit
+                    flow: Down
+                    spacing: 6
+
+                    ip_label := Label {
+                        text: "Robot IP"
+                        draw_text +: {
+                            color: #x404040
+                            text_style: theme.font_regular { font_size: 12.0 }
+                        }
+                    }
+                    robot_ip_input := RobrixTextInput {
+                        width: 200, height: Fit
+                        empty_text: "192.168.4.1"
+                        padding: Inset{top: 6, bottom: 6, left: 10, right: 10}
+                    }
+                }
+
+                // Live webcam thumbnail pinned to the top-right of the
+                // panel. Always visible (background = dark gray) so the
+                // user sees the slot before they tap Open camera; the
+                // `preview_video` inside is the one that gets toggled on/off
+                // by start_camera_preview / stop_camera_preview.
+                // Children stack via flow:Overlay so the gesture pill
+                // floats on top of the live frames.
+                webcam_view := RoundedView {
+                    width: 160, height: 120
+                    flow: Overlay
+                    show_bg: true
+                    draw_bg +: { color: #x1a1a1a, border_radius: 8.0 }
+
+                    preview_video := Video {
+                        width: Fill, height: Fill
+                        visible: false
+                    }
+
+                    gesture_overlay_layer := View {
+                        width: Fill, height: Fill
+                        align: Align{x: 0.5, y: 0.5}
+
+                        gesture_overlay_pill := RoundedView {
+                            visible: false
+                            width: Fit, height: Fit
+                            flow: Down
+                            align: Align{x: 0.5, y: 0.5}
+                            show_bg: true
+                            draw_bg +: { color: #x000000DD, border_radius: 14.0 }
+                            padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
+                            spacing: 2
+
+                            gesture_overlay_icon := Label {
+                                text: "—"
+                                align: Align{x: 0.5, y: 0.5}
+                                draw_text +: {
+                                    color: #xFFFFFF
+                                    text_style: theme.font_bold { font_size: 32.0 }
+                                }
+                            }
+                            gesture_overlay_label := Label {
+                                text: ""
+                                align: Align{x: 0.5, y: 0.5}
+                                draw_text +: {
+                                    color: #xFFFFFF
+                                    text_style: theme.font_bold { font_size: 12.0 }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // Status row: colored dot + text label
@@ -721,19 +726,12 @@ impl RobotScreen {
     fn acquire_camera(&mut self, cx: &mut Cx) {
         log!("RobotScreen: acquiring camera");
         self.camera_held = true;
-        // Refresh the placeholder so it reads "Camera offline" again instead
-        // of the "Camera released" text from a previous deselection.
-        if !self.camera_running {
-            self.view
-                .label(cx, ids!(preview_placeholder))
-                .set_text(cx, "Camera offline\n(click \"Open camera\" to start)");
-        }
         self.view.redraw(cx);
     }
 
     /// Release the camera — called when the user switches to a non-Robot tab.
-    /// Stops the video preview, hides the gesture overlay, swaps the
-    /// placeholder text so the user can see we've let go.
+    /// Stops the video preview and hides the gesture overlay. The webcam
+    /// view itself is hidden by `stop_camera_preview` below.
     fn release_camera(&mut self, cx: &mut Cx) {
         log!("RobotScreen: releasing camera");
         self.camera_held = false;
@@ -745,9 +743,6 @@ impl RobotScreen {
             .view(cx, ids!(gesture_overlay_pill))
             .set_visible(cx, false);
         self.overlay_hide_at = None;
-        self.view
-            .label(cx, ids!(preview_placeholder))
-            .set_text(cx, "Camera released\n(another tab is using it)");
         self.view.redraw(cx);
     }
 
@@ -819,10 +814,6 @@ impl RobotScreen {
         let choice = VoipGlobalState::get_camera_choice(cx);
         let Some(choice) = choice else {
             log!("RobotScreen: no camera available — refusing to start");
-            self.view
-                .label(cx, ids!(preview_placeholder))
-                .set_text(cx, "No camera detected");
-            self.view.redraw(cx);
             return;
         };
         let video = self.view.video(cx, ids!(preview_video));
@@ -835,11 +826,10 @@ impl RobotScreen {
             choice.name, choice.width, choice.height, choice.pixel_format
         );
 
-        // Order matters: the Video widget must be visible (and the placeholder
-        // hidden) BEFORE begin_playback, otherwise Makepad's macOS native
-        // preview can't attach its camera layer to the widget's draw list.
-        // The VoIP lobby uses the same ordering.
-        self.view.view(cx, ids!(placeholder_layer)).set_visible(cx, false);
+        // The webcam_view container is always visible (it's pinned to the
+        // top-right of the panel); we only flip the Video widget itself on
+        // BEFORE begin_playback so Makepad's native preview can attach its
+        // overlay layer to the now-visible draw list.
         let video = self.view.video(cx, ids!(preview_video));
         video.set_visible(cx, true);
 
@@ -863,7 +853,8 @@ impl RobotScreen {
         self.view.redraw(cx);
     }
 
-    /// Stop the camera and swap back to the placeholder.
+    /// Stop the camera and collapse the inline webcam view so the panel goes
+    /// back to its compact "camera off" layout.
     fn stop_camera_preview(&mut self, cx: &mut Cx) {
         log!("RobotScreen: stopping camera preview");
         let video = self.view.video(cx, ids!(preview_video));
@@ -874,11 +865,10 @@ impl RobotScreen {
         // its try_send becomes a silent no-op.
         self.capture = None;
         self.camera_running = false;
+        // Hide only the Video widget — the webcam_view container itself
+        // stays visible (just shows the dark gray background) so the slot
+        // doesn't collapse when the camera is closed.
         self.view.video(cx, ids!(preview_video)).set_visible(cx, false);
-        self.view.view(cx, ids!(placeholder_layer)).set_visible(cx, true);
-        self.view
-            .label(cx, ids!(preview_placeholder))
-            .set_text(cx, "Camera offline\n(click \"Open camera\" to start)");
         self.view
             .button(cx, ids!(btn_camera))
             .set_text(cx, "Open camera");

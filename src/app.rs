@@ -1177,6 +1177,16 @@ impl MatchEvent for App {
                 _ => {}
             }
 
+            // Mobile rooms-sidebar emits this when the user taps the "Robot"
+            // row; push the gesture-control screen onto the StackNavigation so
+            // the back button returns to the rooms list. On Desktop this never
+            // fires (the Robot DockTab is always available there).
+            if let Some(crate::home::rooms_sidebar::RobotEntryAction::Open) = action.downcast_ref() {
+                log!("App: RobotEntryAction::Open received, pushing robot_view onto mobile stack");
+                self.ui.stack_navigation(cx, ids!(view_stack)).push(cx, live_id!(robot_view));
+                continue;
+            }
+
             // Handle VoIP PiP overlay actions
             match action.downcast_ref() {
                 Some(VoipAction::ShowPip { room_id }) => {
