@@ -128,12 +128,17 @@ pub fn classify(lm: &[Vec2; 21], handedness: f32) -> Option<GestureAction> {
     // Two-finger peace sign (index + middle extended, ring + pinky curled,
     // thumb don't-care). Direction is encoded by the model's handedness output
     // rather than image-space position, so the user can hold the hand wherever
-    // is comfortable in frame.
+    // is comfortable in frame. We map the user's left hand → `Left`, right
+    // hand → `Right` — i.e. the gesture follows the anatomical hand making
+    // it. After the selfie mirror in `submit_frame_for_inference`, the
+    // OpenCV Zoo model emits `Identity_2 ≈ 1` for the user's right hand and
+    // `≈ 0` for the left, so the polarity here is inverted versus the
+    // constant's pre-mirror documentation.
     if idx_ext && mid_ext && !ring_ext && !pinky_ext {
         return Some(if handedness < HANDEDNESS_RIGHT_THRESHOLD {
-            GestureAction::Right
-        } else {
             GestureAction::Left
+        } else {
+            GestureAction::Right
         });
     }
     None
@@ -287,18 +292,19 @@ mod tests {
     }
 
     #[test]
-    fn two_fingers_right_hand_yields_right() {
-        // Index + middle extended, ring + pinky curled. The OpenCV Zoo port's
-        // `Identity_2` reads ~0 for the user's right hand, so handedness below
-        // the threshold → `Right` regardless of pointing direction.
+    fn two_fingers_low_handedness_yields_left() {
+        // Index + middle extended, ring + pinky curled. Handedness <
+        // threshold now maps to `Left` — we mirror selfie frames before
+        // inference, which flips the OpenCV Zoo port's `Identity_2`
+        // polarity (the user's right hand now reads ≈ 1, left hand ≈ 0).
         let lm = fixture([true, true, false, false], false, Vec2::new(0.0, -0.6), Vec2::new(0.0, 0.0));
-        assert_eq!(classify(&lm, 0.1), Some(GestureAction::Right));
+        assert_eq!(classify(&lm, 0.1), Some(GestureAction::Left));
     }
 
     #[test]
-    fn two_fingers_left_hand_yields_left() {
+    fn two_fingers_high_handedness_yields_right() {
         let lm = fixture([true, true, false, false], false, Vec2::new(0.0, -0.6), Vec2::new(0.0, 0.0));
-        assert_eq!(classify(&lm, 0.9), Some(GestureAction::Left));
+        assert_eq!(classify(&lm, 0.9), Some(GestureAction::Right));
     }
 
     #[test]

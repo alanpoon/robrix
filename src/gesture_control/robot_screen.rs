@@ -17,9 +17,12 @@ use std::time::Instant;
 use makepad_widgets::*;
 use makepad_widgets::video::VideoCameraPreviewMode;
 
+use crossbeam_channel::Receiver;
+
 use crate::gesture_control::{
     GestureAction,
     inference_worker::InferenceWorker,
+    model_downloader,
     robot_http::{HttpOutcome, HttpResult, RobotHttpSender, validate_ip},
 };
 
@@ -376,8 +379,20 @@ pub struct RobotScreen {
     /// successfully loaded; `None` if load failed or hasn't been attempted.
     #[rust] inference: Option<InferenceWorker>,
     /// Set once we've tried to load the model and failed — keeps us from
-    /// re-attempting load on every click.
+    /// re-attempting load on every click. Cleared automatically when a
+    /// pending model download succeeds (see `pump_inference_results`).
     #[rust] inference_load_failed: bool,
+    /// True once we've kicked off the async model download. Stays true
+    /// even on failure so we don't spam the network with retries.
+    #[rust] model_download_started: bool,
+    /// Result channel from the background `ensure_downloaded()` task.
+    /// `Some` only while a download is in flight; cleared once the result
+    /// has been consumed in `pump_inference_results`.
+    #[rust] model_download_rx: Option<Receiver<Result<(), String>>>,
+    /// One-shot diagnostic: log the dimensions of the first camera frame
+    /// that reaches inference so we can verify `cx.camera_frame_input`
+    /// is actually firing on Android.
+    #[rust] logged_first_camera_frame: bool,
     /// Which manual-control button is currently lit. `None` means all six are
     /// at their idle colour. Used to avoid redundant `script_apply_eval!` calls
     /// when continuous inference keeps emitting the same gesture.
@@ -385,6 +400,13 @@ pub struct RobotScreen {
     /// Wall-clock instant at which the current button highlight should fade.
     /// `None` means no active highlight.
     #[rust] highlight_clear_at: Option<Instant>,
+    /// Wall-clock instant at which an inference-detected movement gesture
+    /// should be auto-stopped (we send a one-shot `GestureAction::Stop`
+    /// `AUTO_STOP_AFTER_MS` after the gesture was detected). Each new
+    /// inference-detected movement resets the timer. `None` means no
+    /// movement is currently active. Manual control buttons bypass this —
+    /// they already use the press/release pattern for stop.
+    #[rust] auto_stop_at: Option<Instant>,
 }
 
 const MAX_RECENT_LINES: usize = 8;
@@ -394,6 +416,13 @@ const OVERLAY_HOLD_MS: u64 = 1_500;
 /// How long a manual-control button stays highlighted after the most recent
 /// gesture emit (continuous inference refreshes the timer each frame).
 const HIGHLIGHT_HOLD_MS: u64 = 600;
+/// How long after an inference-detected movement (Forward/Back/Left/Right)
+/// we automatically issue a `Stop` to the robot. Each new movement detection
+/// resets the timer — so holding a pose keeps the robot moving — but the
+/// moment the inference stops emitting that gesture for `AUTO_STOP_AFTER_MS`,
+/// we cut motion. Avoids runaway robots when the user lowers their hand
+/// without immediately transitioning to a different gesture.
+const AUTO_STOP_AFTER_MS: u64 = 500;
 /// Idle background colour for the six manual-control buttons. Matches the
 /// `#xCCCCCC` constant set on each `draw_bg` in the DSL.
 const COLOR_BTN_DEFAULT: Vec4 = Vec4 { x: 0.8, y: 0.8, z: 0.8, w: 1.0 };
@@ -422,6 +451,7 @@ impl Widget for RobotScreen {
             self.refresh_green_window(cx);
             self.refresh_overlay_visibility(cx);
             self.refresh_button_highlight(cx);
+            self.refresh_auto_stop(cx);
             self.pump_camera_frames(cx);
             self.pump_inference_results(cx);
             cx.new_next_frame();
@@ -753,8 +783,30 @@ impl RobotScreen {
     ///
     /// The model is lazy-loaded on the first frame so a missing/corrupt ONNX
     /// surfaces as a one-time log line rather than blocking tab open.
-    fn submit_frame_for_inference(&mut self, frame: WebRtcVideoFrame) {
+    ///
+    /// We horizontally flip the RGBA buffer before submitting because
+    /// `pick_camera_choice` now prefers the front (selfie) camera, which
+    /// delivers a mirrored image. The hand-model and `gesture_classifier`'s
+    /// handedness threshold were calibrated against the un-mirrored back-
+    /// camera orientation, so without this flip a user's right hand reads
+    /// as left and the two-finger Left/Right gestures come out swapped.
+    fn submit_frame_for_inference(&mut self, mut frame: WebRtcVideoFrame) {
+        mirror_rgba_horizontal_in_place(&mut frame.data, frame.width, frame.height);
+        if !self.logged_first_camera_frame {
+            log!(
+                "RobotScreen: first inference frame received — {}x{} RGBA, {} bytes",
+                frame.width, frame.height, frame.data.len()
+            );
+            self.logged_first_camera_frame = true;
+        }
         if self.inference.is_none() && !self.inference_load_failed {
+            // Don't even try to load if the ONNX file isn't on disk —
+            // `ensure_model_download_started` (driven from the per-frame
+            // pump) will fetch it asynchronously and clear
+            // `inference_load_failed` on success so the next frame retries.
+            if !model_downloader::landmark_model_present_and_valid() {
+                return;
+            }
             match InferenceWorker::spawn() {
                 Ok(w) => self.inference = Some(w),
                 Err(e) => {
@@ -768,9 +820,81 @@ impl RobotScreen {
         }
     }
 
+    /// Kick off the async model download via Robrix's tokio runtime if we
+    /// haven't already. Result lands on `self.model_download_rx`, which is
+    /// drained on every NextFrame in `pump_inference_results`.
+    fn ensure_model_download_started(&mut self) {
+        if self.model_download_started {
+            return;
+        }
+        if model_downloader::landmark_model_present_and_valid() {
+            return;
+        }
+        self.model_download_started = true;
+        let (tx, rx) = crossbeam_channel::bounded::<Result<(), String>>(1);
+        self.model_download_rx = Some(rx);
+        log!("RobotScreen: hand-model ONNX missing — starting async download");
+        let handle = match crate::sliding_sync::start_matrix_tokio() {
+            Ok(h) => h,
+            Err(e) => {
+                log!("RobotScreen: tokio runtime unavailable for model download: {e:#}");
+                let _ = tx.try_send(Err(format!("no tokio runtime: {e}")));
+                return;
+            }
+        };
+        handle.spawn(async move {
+            let result = model_downloader::ensure_downloaded()
+                .await
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.try_send(result);
+        });
+    }
+
     /// Drain any inference results delivered by the background worker, update
-    /// the inference label, and emit any recognized gesture.
+    /// the inference label, and emit any recognized gesture. Also polls the
+    /// async model-download channel so the inference can come online once
+    /// the ONNX file lands on disk.
     fn pump_inference_results(&mut self, cx: &mut Cx) {
+        // First — if camera frames are flowing but inference can't load
+        // because the ONNX is missing, start the async download. Idempotent.
+        if self.camera_running
+            && self.inference.is_none()
+            && !self.inference_load_failed
+            && !self.model_download_started
+            && !model_downloader::landmark_model_present_and_valid()
+        {
+            self.ensure_model_download_started();
+            self.view
+                .label(cx, ids!(inference_value))
+                .set_text(cx, "Downloading model…");
+            self.view.redraw(cx);
+        }
+
+        // Second — drain the download result if one is pending. Clearing
+        // `inference_load_failed` lets the next frame retry `HandModel::load`.
+        if let Some(rx) = self.model_download_rx.as_ref() {
+            if let Ok(result) = rx.try_recv() {
+                match result {
+                    Ok(()) => {
+                        log!("RobotScreen: model download succeeded; will retry inference");
+                        self.inference_load_failed = false;
+                        self.view
+                            .label(cx, ids!(inference_value))
+                            .set_text(cx, "Model ready");
+                    }
+                    Err(e) => {
+                        log!("RobotScreen: model download failed: {e}");
+                        self.inference_load_failed = true;
+                        self.view
+                            .label(cx, ids!(inference_value))
+                            .set_text(cx, "Model download failed");
+                    }
+                }
+                self.model_download_rx = None;
+                self.view.redraw(cx);
+            }
+        }
+
         let results: Vec<_> = {
             let Some(worker) = self.inference.as_ref() else { return };
             std::iter::from_fn(|| worker.try_recv()).collect()
@@ -800,7 +924,43 @@ impl RobotScreen {
                     .label(cx, ids!(inference_value))
                     .set_text(cx, result.detected.display_label());
                 self.emit_gesture(cx, result.detected);
+                // For inference-detected movements only, schedule an
+                // automatic Stop one second from now (refreshed on each new
+                // movement detection, so holding the pose keeps the robot
+                // going). Manual control buttons bypass this; they already
+                // emit Stop on release.
+                if matches!(
+                    result.detected,
+                    GestureAction::Forward
+                        | GestureAction::Back
+                        | GestureAction::Left
+                        | GestureAction::Right
+                ) {
+                    self.auto_stop_at = Some(
+                        Instant::now() + std::time::Duration::from_millis(AUTO_STOP_AFTER_MS),
+                    );
+                } else {
+                    // Grab/Release/Stop reset the timer too (no auto-stop
+                    // needed; those are one-shot or already-Stop actions).
+                    self.auto_stop_at = None;
+                }
             }
+        }
+    }
+
+    /// Fire the auto-stop if its timer has elapsed. Called on every NextFrame.
+    fn refresh_auto_stop(&mut self, cx: &mut Cx) {
+        let Some(deadline) = self.auto_stop_at else { return };
+        if Instant::now() < deadline {
+            return;
+        }
+        log!("RobotScreen: auto-stopping inference-driven movement after timeout");
+        self.auto_stop_at = None;
+        // Only send Stop if we haven't already (e.g. via the no-gesture
+        // transition path). Last-gesture dedup keeps us from spamming.
+        if !matches!(self.last_gesture, GestureAction::None | GestureAction::Stop) {
+            self.fire_command(cx, GestureAction::Stop);
+            self.last_gesture = GestureAction::Stop;
         }
     }
 
@@ -949,6 +1109,29 @@ impl RobotScreen {
                                 // dot a neutral fixed colour and rely on the
                                 // text label to convey state.
         self.view.redraw(cx);
+    }
+}
+
+/// Horizontally flip a packed-RGBA buffer in place. Used to undo the selfie
+/// mirror on front-camera frames before they go to the hand-landmark model —
+/// see `RobotScreen::submit_frame_for_inference` for context.
+fn mirror_rgba_horizontal_in_place(data: &mut [u8], width: u32, height: u32) {
+    let w = width as usize;
+    let h = height as usize;
+    let row_stride = w * 4;
+    if data.len() < row_stride * h || w < 2 {
+        return;
+    }
+    let half = w / 2;
+    for y in 0..h {
+        let row = &mut data[y * row_stride..(y + 1) * row_stride];
+        for c in 0..half {
+            let left = c * 4;
+            let right = (w - 1 - c) * 4;
+            for k in 0..4 {
+                row.swap(left + k, right + k);
+            }
+        }
     }
 }
 

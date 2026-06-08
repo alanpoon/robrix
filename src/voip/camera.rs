@@ -21,13 +21,28 @@ pub struct CameraManager;
 impl CameraManager {
     /// Pick the best camera format from available options.
     ///
-    /// Selects the first enumerated device (the user's primary camera —
-    /// OBS Virtual Camera when installed, since it inserts itself at index 0
-    /// via its CMIO DAL plugin) and then ranks formats within that device.
-    /// We do NOT cross-rank devices: the user's chosen capture source wins
-    /// even if another device happens to expose a "nicer" pixel format.
+    /// Prefers the front-facing camera (selfie) by name — Android's
+    /// Camera2 NDK exposes devices named "Front Camera" / "Back Camera",
+    /// and the front one is what both the VoIP lobby (video call self-view)
+    /// and the Robot tab (gesture recognition of the user's hand in front
+    /// of the screen) want. We match on case-insensitive substring so
+    /// other platforms' naming variants ("FaceTime HD Camera", "User
+    /// Facing Camera", etc.) get a fair shot too — falls back to the first
+    /// enumerated device if no front match exists (e.g. external webcam,
+    /// OBS Virtual Camera).
     pub fn pick_camera_choice(ev: &VideoInputsEvent) -> Option<CameraChoice> {
-        let desc = ev.descs.first()?;
+        fn looks_like_front(name: &str) -> bool {
+            let n = name.to_ascii_lowercase();
+            n.contains("front")
+                || n.contains("user")
+                || n.contains("facetime")
+                || n.contains("selfie")
+        }
+        let desc = ev
+            .descs
+            .iter()
+            .find(|d| looks_like_front(&d.name))
+            .or_else(|| ev.descs.first())?;
 
         fn pixel_rank(pixel_format: VideoPixelFormat) -> usize {
             match pixel_format {
