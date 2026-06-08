@@ -7047,6 +7047,9 @@ dependencies = [
  "robius-open",
  "robius-use-makepad",
  "ruma",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "sanitize-filename",
  "semver",
  "serde",
@@ -7060,6 +7063,7 @@ dependencies = [
  "tsp_sdk",
  "unicode-segmentation 1.12.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "url",
+ "webpki-roots",
  "winresource",
 ]
 

@@ -27,17 +27,6 @@ impl CameraManager {
     /// We do NOT cross-rank devices: the user's chosen capture source wins
     /// even if another device happens to expose a "nicer" pixel format.
     pub fn pick_camera_choice(ev: &VideoInputsEvent) -> Option<CameraChoice> {
-        log!("Camera: enumerated {} device(s)", ev.descs.len());
-        for desc in &ev.descs {
-            log!("  Device: {} ({} formats)", desc.name, desc.formats.len());
-            for (i, fmt) in desc.formats.iter().enumerate() {
-                log!(
-                    "    Format {}: {}x{} {:?} fps={:?}",
-                    i, fmt.width, fmt.height, fmt.pixel_format, fmt.frame_rate
-                );
-            }
-        }
-
         let desc = ev.descs.first()?;
 
         fn pixel_rank(pixel_format: VideoPixelFormat) -> usize {

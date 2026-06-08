@@ -80,14 +80,28 @@ tracing-subscriber = "0.3.17"
 ## Default features include the ONNX parser used by `hand_model::HandModel::load`.
 tract-onnx = "0.21"
 sha2 = "0.10"
+unicode-segmentation = "1.11.0"
+url = "2.5.0"
 
 ## Objective-C runtime for the parallel AVFoundation video capture used by
 ## the Robot tab on macOS. Same major version as the one Makepad already
 ## pulls transitively, so no duplicate compilation.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
-unicode-segmentation = "1.11.0"
-url = "2.5.0"
+
+
+## Android needs a custom rustls ClientConfig wired into our reqwest::Client
+## (see proxy_config::android_setup_webkpi_verifier). rustls-platform-verifier
+## (reqwest's default) panics on Android without a JNI/Kotlin shim, so we
+## sidestep it by preconfiguring rustls with webpki-roots + native-certs —
+## the same workaround matrix-sdk applies internally and the same shape the
+## livekit-rs mobile example uses for its TLS path.
+[target.'cfg(target_os = "android")'.dependencies]
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-native-certs = "0.8"
+rustls-pki-types = { version = "1", features = ["std"] }
+webpki-roots = "1.0"
+
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 rfd = "0.15"
@@ -99,7 +113,6 @@ nokhwa = { version = "0.10", features = ["input-native"] }
 ## LiveKit WebRTC SDK - only for desktop platforms (macOS, Linux)
 ## Windows is excluded due to MSVC runtime library mismatch with webrtc-sys
 ## rustls-tls-native-roots is required for WSS connections
-[target.'cfg(all(not(any(target_os = "android", target_os = "ios", target_os = "windows"))))'.dependencies]
 livekit = { version = "0.7", features = ["rustls-tls-native-roots"] }
 
 ## Dependencies for TSP support.
