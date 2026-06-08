@@ -1299,6 +1299,32 @@ pub enum MatrixRequest {
         /// * `None` means reset to the room's default user power level.
         /// * `Some` means set a role preset.
         room_member_role: Option<RoomMemberRole>,
+        /// If `Some`, overrides `room_member_role` and sets the user's
+        /// power level to this raw value. Used by the Mute/Unmute action
+        /// (which sets the value to `-1` for mute and `0` for unmute).
+        raw_power_level: Option<i64>,
+    },
+    /// Request to kick (forcibly remove) a user from a room.
+    /// If the target's membership is `Invite`, this rescinds the invitation
+    /// ("disinvite"); otherwise it removes a currently joined member.
+    KickUser {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+        /// Optional reason shown to the kicked user and in room history.
+        reason: Option<String>,
+    },
+    /// Request to ban a user from a room. A banned user cannot rejoin
+    /// until they are unbanned.
+    BanUser {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+        reason: Option<String>,
+    },
+    /// Request to unban a previously banned user from a room.
+    UnbanUser {
+        room_id: OwnedRoomId,
+        user_id: OwnedUserId,
+        reason: Option<String>,
     },
     /// Request to upload and set the avatar of the current user's account.
     UploadAvatar {
@@ -4117,7 +4143,118 @@ async fn matrix_worker_task(
                 });
             }
 
-            MatrixRequest::SetRoomMemberPowerLevel { room_id, user_id, room_member_role } => {
+            MatrixRequest::KickUser { room_id, user_id, reason } => {
+                let Some(client) = get_client() else { continue };
+                let _kick_task = Handle::current().spawn(async move {
+                    let Some(room) = client.get_room(&room_id) else {
+                        enqueue_popup_notification(
+                            format!("Failed to kick {user_id}: room {room_id} not found."),
+                            PopupKind::Error,
+                            None,
+                        );
+                        return;
+                    };
+                    log!("Sending request to kick user {user_id} from room {room_id}...");
+                    match room.kick_user(&user_id, reason.as_deref()).await {
+                        Ok(_) => {
+                            enqueue_popup_notification(
+                                format!("Removed {user_id} from the room."),
+                                PopupKind::Success,
+                                Some(3.0),
+                            );
+                            if let Ok(Some(new_room_member)) = room.get_member(&user_id).await {
+                                enqueue_user_profile_update(UserProfileUpdate::RoomMemberOnly {
+                                    room_id: room_id.clone(),
+                                    room_member: new_room_member,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            enqueue_popup_notification(
+                                format!("Failed to kick {user_id}: {e}"),
+                                PopupKind::Error,
+                                None,
+                            );
+                        }
+                    }
+                });
+            }
+
+            MatrixRequest::BanUser { room_id, user_id, reason } => {
+                let Some(client) = get_client() else { continue };
+                let _ban_task = Handle::current().spawn(async move {
+                    let Some(room) = client.get_room(&room_id) else {
+                        enqueue_popup_notification(
+                            format!("Failed to ban {user_id}: room {room_id} not found."),
+                            PopupKind::Error,
+                            None,
+                        );
+                        return;
+                    };
+                    log!("Sending request to ban user {user_id} from room {room_id}...");
+                    match room.ban_user(&user_id, reason.as_deref()).await {
+                        Ok(_) => {
+                            enqueue_popup_notification(
+                                format!("Banned {user_id} from the room."),
+                                PopupKind::Success,
+                                Some(3.0),
+                            );
+                            if let Ok(Some(new_room_member)) = room.get_member(&user_id).await {
+                                enqueue_user_profile_update(UserProfileUpdate::RoomMemberOnly {
+                                    room_id: room_id.clone(),
+                                    room_member: new_room_member,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            enqueue_popup_notification(
+                                format!("Failed to ban {user_id}: {e}"),
+                                PopupKind::Error,
+                                None,
+                            );
+                        }
+                    }
+                });
+            }
+
+            MatrixRequest::UnbanUser { room_id, user_id, reason } => {
+                let Some(client) = get_client() else { continue };
+                let _unban_task = Handle::current().spawn(async move {
+                    let Some(room) = client.get_room(&room_id) else {
+                        enqueue_popup_notification(
+                            format!("Failed to unban {user_id}: room {room_id} not found."),
+                            PopupKind::Error,
+                            None,
+                        );
+                        return;
+                    };
+                    log!("Sending request to unban user {user_id} from room {room_id}...");
+                    match room.unban_user(&user_id, reason.as_deref()).await {
+                        Ok(_) => {
+                            enqueue_popup_notification(
+                                format!("Unbanned {user_id}."),
+                                PopupKind::Success,
+                                Some(3.0),
+                            );
+                            if let Ok(Some(new_room_member)) = room.get_member(&user_id).await {
+                                enqueue_user_profile_update(UserProfileUpdate::RoomMemberOnly {
+                                    room_id: room_id.clone(),
+                                    room_member: new_room_member,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            enqueue_popup_notification(
+                                format!("Failed to unban {user_id}: {e}"),
+                                PopupKind::Error,
+                                None,
+                            );
+                        }
+                    }
+                });
+            }
+
+            MatrixRequest::SetRoomMemberPowerLevel { room_id, user_id, room_member_role, raw_power_level } => {
                 let Some(client) = get_client() else { continue };
                 let _set_room_member_power_level_task = Handle::current().spawn(async move {
                     let Some(room) = client.get_room(&room_id) else {
@@ -4158,10 +4295,24 @@ async fn matrix_worker_task(
                         return;
                     }
 
-                    let new_level = match room_member_role {
-                        Some(RoomMemberRole::Moderator) => int!(50),
-                        Some(RoomMemberRole::Creator | RoomMemberRole::Administrator) => int!(100),
-                        Some(RoomMemberRole::User) | None => power_levels.users_default,
+                    let new_level = if let Some(raw) = raw_power_level {
+                        match matrix_sdk::ruma::Int::new(raw) {
+                            Some(level) => level,
+                            None => {
+                                enqueue_popup_notification(
+                                    format!("Invalid power level value {raw} for {user_id}."),
+                                    PopupKind::Error,
+                                    None,
+                                );
+                                return;
+                            }
+                        }
+                    } else {
+                        match room_member_role {
+                            Some(RoomMemberRole::Moderator) => int!(50),
+                            Some(RoomMemberRole::Creator | RoomMemberRole::Administrator) => int!(100),
+                            Some(RoomMemberRole::User) | None => power_levels.users_default,
+                        }
                     };
 
                     match room.update_power_levels(vec![(user_id.as_ref(), new_level)]).await {
@@ -8313,7 +8464,7 @@ async fn spawn_sso_server(
 
 bitflags! {
     /// The powers that a user has in a given room.
-    #[derive(Copy, Clone, PartialEq, Eq)]
+    #[derive(Copy, Clone, PartialEq, Eq, Debug)]
     pub struct UserPowerLevels: u64 {
         const Ban = 1 << 0;
         const Invite = 1 << 1;

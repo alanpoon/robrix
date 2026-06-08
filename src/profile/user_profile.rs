@@ -2,11 +2,11 @@
 
 use std::{borrow::Cow, ops::{Deref, DerefMut}};
 use makepad_widgets::*;
-use matrix_sdk::{room::{RoomMember, RoomMemberRole}, ruma::{events::room::member::MembershipState, OwnedRoomId, OwnedUserId}};
+use matrix_sdk::{room::{RoomMember, RoomMemberRole}, ruma::{events::room::member::MembershipState, int, OwnedRoomId, OwnedUserId}};
 use crate::{
-    app::AppState, avatar_cache, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{MatrixRequest, current_user_id, is_user_ignored, submit_async_request}, utils
+    app::AppState, avatar_cache, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{MatrixRequest, UserPowerLevels, current_user_id, is_user_ignored, submit_async_request}, utils
 };
-use super::user_profile_cache;
+use super::{moderation_action_modal::{ModerationActionKind, ModerationActionModalAction}, user_profile_cache};
 
 
 /// Information retrieved about a user: their displayable name, ID, and known avatar state.
@@ -259,6 +259,42 @@ script_mod! {
                 icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -0.5} }
                 text: "Ignore (Block) User"
             }
+
+            mute_user_button := RobrixNegativeIconButton {
+                visible: false,
+                padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
+                margin: 0,
+                draw_icon.svg: (ICON_FORBIDDEN)
+                icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -0.5} }
+                text: "Mute"
+            }
+
+            disinvite_user_button := RobrixNegativeIconButton {
+                visible: false,
+                padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
+                margin: 0,
+                draw_icon.svg: (ICON_FORBIDDEN)
+                icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -0.5} }
+                text: "Kick from room"
+            }
+
+            ban_user_button := RobrixNegativeIconButton {
+                visible: false,
+                padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
+                margin: 0,
+                draw_icon.svg: (ICON_FORBIDDEN)
+                icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -0.5} }
+                text: "Ban from room"
+            }
+
+            unban_user_button := RobrixNegativeIconButton {
+                visible: false,
+                padding: Inset{top: 10, bottom: 10, left: 12, right: 15}
+                margin: 0,
+                draw_icon.svg: (ICON_FORBIDDEN)
+                icon_walk: Walk{width: 16, height: 16, margin: Inset{left: -2, right: -0.5} }
+                text: "Unban from room"
+            }
         }
 
         // A view that allows the user to verify a new DID and associate it
@@ -345,7 +381,15 @@ pub struct UserProfilePaneInfo {
     pub profile_and_room_id: UserProfileAndRoomId,
     pub room_name: String,
     pub room_member: Option<RoomMember>,
-    pub can_change_room_power_levels: bool,
+    /// The viewing (acting) user's power levels in this room, used to
+    /// gate moderation actions (kick/ban/unban/mute) and the power-level
+    /// dropdown. `can_change_room_power_levels` is `user_power.can_change_room_power_levels()`.
+    pub user_power: UserPowerLevels,
+}
+impl UserProfilePaneInfo {
+    pub fn can_change_room_power_levels(&self) -> bool {
+        self.user_power.can_change_room_power_levels()
+    }
 }
 impl Deref for UserProfilePaneInfo {
     type Target = UserProfileAndRoomId;
@@ -512,7 +556,7 @@ impl Widget for UserProfileSlidingPane {
         if let Event::Actions(actions) = event {
             let power_level_dropdown = self.drop_down(cx, ids!(power_level_dropdown));
             if power_level_dropdown.changed(actions).is_some()
-                && info.can_change_room_power_levels
+                && info.can_change_room_power_levels()
                 && let Some(room_member) = info.room_member.as_ref()
                 && !room_member.is_account_user()
             {
@@ -533,6 +577,7 @@ impl Widget for UserProfileSlidingPane {
                         room_id: info.room_id.clone(),
                         user_id: info.user_id.clone(),
                         room_member_role: selected_role,
+                        raw_power_level: None,
                     });
                 }
             }
@@ -582,6 +627,64 @@ impl Widget for UserProfileSlidingPane {
                         if room_member.is_ignored() { "un" } else { "" },
                         info.user_id,
                     );
+                }
+
+                // Mute / Unmute: dispatch directly (non-destructive, reversible)
+                // by setting the target's power level to -1 / 0.
+                if self.button(cx, ids!(mute_user_button)).clicked(actions) {
+                    let is_currently_muted = room_member.power_level() <= int!(-1);
+                    let new_raw_power = if is_currently_muted { 0 } else { -1 };
+                    submit_async_request(MatrixRequest::SetRoomMemberPowerLevel {
+                        room_id: info.room_id.clone(),
+                        user_id: info.user_id.clone(),
+                        room_member_role: None,
+                        raw_power_level: Some(new_raw_power),
+                    });
+                    log!("Submitting request to {}mute user {} (raw power level {new_raw_power}).",
+                        if is_currently_muted { "un" } else { "" },
+                        info.user_id,
+                    );
+                }
+
+                // Destructive actions (Disinvite/Kick, Ban, Unban) open the
+                // moderation confirmation modal; the modal dispatches the
+                // matrix request after the user confirms.
+                let display_name = info.displayable_name().to_string();
+                let room_name = info.room_name.clone();
+                if self.button(cx, ids!(disinvite_user_button)).clicked(actions) {
+                    let is_invite = matches!(
+                        room_member.membership(),
+                        matrix_sdk::ruma::events::room::member::MembershipState::Invite,
+                    );
+                    cx.action(ModerationActionModalAction::Open(
+                        ModerationActionKind::Kick {
+                            room_id: info.room_id.clone(),
+                            user_id: info.user_id.clone(),
+                            user_display_name: display_name.clone(),
+                            room_name: room_name.clone(),
+                            is_invite,
+                        },
+                    ));
+                }
+                if self.button(cx, ids!(ban_user_button)).clicked(actions) {
+                    cx.action(ModerationActionModalAction::Open(
+                        ModerationActionKind::Ban {
+                            room_id: info.room_id.clone(),
+                            user_id: info.user_id.clone(),
+                            user_display_name: display_name.clone(),
+                            room_name: room_name.clone(),
+                        },
+                    ));
+                }
+                if self.button(cx, ids!(unban_user_button)).clicked(actions) {
+                    cx.action(ModerationActionModalAction::Open(
+                        ModerationActionKind::Unban {
+                            room_id: info.room_id.clone(),
+                            user_id: info.user_id.clone(),
+                            user_display_name: display_name,
+                            room_name,
+                        },
+                    ));
                 }
             }
         }
@@ -640,7 +743,7 @@ impl Widget for UserProfileSlidingPane {
             .map(|rm| rm.is_account_user())
             .unwrap_or_else(|| current_user_id().is_some_and(|uid| uid == info.user_id));
 
-        let show_power_level_controls = info.can_change_room_power_levels
+        let show_power_level_controls = info.can_change_room_power_levels()
             && !is_pane_showing_current_account
             && info.room_member.is_some();
         self.view(cx, ids!(power_level_controls)).set_visible(cx, show_power_level_controls);
@@ -667,6 +770,74 @@ impl Widget for UserProfileSlidingPane {
             cx,
             if is_ignored { "Unignore (Unblock) User" } else { "Ignore (Block) User" }
         );
+
+        // Moderation buttons (Mute/Kick/Ban/Unban) are gated by the viewing
+        // user's power levels and the target's current membership state. They
+        // are always hidden when viewing the current account's own profile or
+        // when we don't yet have RoomMember info loaded.
+        let mute_button = self.button(cx, ids!(mute_user_button));
+        let disinvite_button = self.button(cx, ids!(disinvite_user_button));
+        let ban_button = self.button(cx, ids!(ban_user_button));
+        let unban_button = self.button(cx, ids!(unban_user_button));
+
+        let target_member = if is_pane_showing_current_account {
+            None
+        } else {
+            info.room_member.as_ref()
+        };
+        if let Some(room_member) = target_member {
+            let membership = room_member.membership();
+            let target_role = room_member.suggested_role_for_power_level();
+            let target_is_admin = matches!(
+                target_role,
+                RoomMemberRole::Administrator | RoomMemberRole::Creator,
+            );
+            let target_power = room_member.power_level();
+
+            // Kick / Disinvite: requires kick power AND the target is currently
+            // joined or invited. Label changes for pending invites.
+            let show_kick = info.user_power.can_kick()
+                && matches!(membership, MembershipState::Join | MembershipState::Invite);
+            disinvite_button.set_visible(cx, show_kick);
+            if show_kick {
+                disinvite_button.set_text(
+                    cx,
+                    if matches!(membership, MembershipState::Invite) {
+                        "Disinvite from room"
+                    } else {
+                        "Kick from room"
+                    },
+                );
+            }
+
+            // Ban / Unban are mutually exclusive based on whether the target is
+            // currently banned.
+            let target_is_banned = matches!(membership, MembershipState::Ban);
+            let show_ban = info.user_power.can_ban() && !target_is_banned;
+            let show_unban = info.user_power.can_unban() && target_is_banned;
+            ban_button.set_visible(cx, show_ban);
+            unban_button.set_visible(cx, show_unban);
+
+            // Mute / Unmute. Reuses SetRoomMemberPowerLevel under the hood
+            // (power level -1 = muted, 0 = unmuted). Admins/Creators cannot be
+            // muted because that would require a power-level demotion the
+            // acting user is unlikely to be allowed to perform.
+            let show_mute = info.user_power.can_change_room_power_levels()
+                && !target_is_admin
+                && matches!(membership, MembershipState::Join | MembershipState::Invite);
+            mute_button.set_visible(cx, show_mute);
+            if show_mute {
+                mute_button.set_text(
+                    cx,
+                    if target_power <= int!(-1) { "Unmute" } else { "Mute" },
+                );
+            }
+        } else {
+            mute_button.set_visible(cx, false);
+            disinvite_button.set_visible(cx, false);
+            ban_button.set_visible(cx, false);
+            unban_button.set_visible(cx, false);
+        }
 
         self.view.draw_walk(cx, scope, walk)
     }
@@ -740,6 +911,10 @@ impl UserProfileSlidingPane {
         self.view.button(cx, ids!(copy_link_to_user_button)).reset_hover(cx);
         self.view.button(cx, ids!(jump_to_read_receipt_button)).reset_hover(cx);
         self.view.button(cx, ids!(ignore_user_button)).reset_hover(cx);
+        self.view.button(cx, ids!(mute_user_button)).reset_hover(cx);
+        self.view.button(cx, ids!(disinvite_user_button)).reset_hover(cx);
+        self.view.button(cx, ids!(ban_user_button)).reset_hover(cx);
+        self.view.button(cx, ids!(unban_user_button)).reset_hover(cx);
         self.redraw(cx);
     }
 }

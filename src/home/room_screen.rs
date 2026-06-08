@@ -5295,8 +5295,9 @@ impl Widget for RoomScreen {
                                 .as_ref()
                                 .and_then(|member| member.avatar_url().map(ToOwned::to_owned))
                         );
-                        let can_change_room_power_levels = self.tl_state.as_ref()
-                            .is_some_and(|tl| tl.user_power.can_change_room_power_levels());
+                        let user_power = self.tl_state.as_ref()
+                            .map(|tl| tl.user_power)
+                            .unwrap_or_else(UserPowerLevels::empty);
                         self.show_user_profile(
                             cx,
                             &user_profile_sliding_pane,
@@ -5311,7 +5312,7 @@ impl Widget for RoomScreen {
                                 },
                                 room_name: room_name_id.to_string(),
                                 room_member,
-                                can_change_room_power_levels,
+                                user_power,
                             },
                         );
                     }
@@ -5784,8 +5785,9 @@ impl Widget for RoomScreen {
                             );
                         }
                     }
-                    let can_change_room_power_levels = self.tl_state.as_ref()
-                        .is_some_and(|tl| tl.user_power.can_change_room_power_levels());
+                    let user_power = self.tl_state.as_ref()
+                        .map(|tl| tl.user_power)
+                        .unwrap_or_else(UserPowerLevels::empty);
                     self.show_user_profile(
                         cx,
                         &user_profile_sliding_pane,
@@ -5796,7 +5798,7 @@ impl Widget for RoomScreen {
                                 |r| r.to_string(),
                             ),
                             room_member,
-                            can_change_room_power_levels,
+                            user_power,
                         },
                     );
                 }
@@ -7433,8 +7435,9 @@ impl RoomScreen {
                     let avatar_state = room_member.as_ref()
                         .and_then(|member| member.avatar_url().map(ToOwned::to_owned))
                         .map_or(AvatarState::Unknown, |avatar_url| AvatarState::Known(Some(avatar_url)));
-                    let can_change_room_power_levels = self.tl_state.as_ref()
-                        .is_some_and(|tl| tl.user_power.can_change_room_power_levels());
+                    let user_power = self.tl_state.as_ref()
+                        .map(|tl| tl.user_power)
+                        .unwrap_or_else(UserPowerLevels::empty);
                     // There is no synchronous way to get the user's full profile info
                     // including the details of their room membership,
                     // so we fill in with the details we *do* know currently,
@@ -7456,7 +7459,7 @@ impl RoomScreen {
                             room_name: room_name_id.to_string(),
                             // TODO: use the extra `via` parameters
                             room_member,
-                            can_change_room_power_levels,
+                            user_power,
                         },
                     );
                     true
