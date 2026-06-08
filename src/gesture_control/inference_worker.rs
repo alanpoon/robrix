@@ -108,7 +108,8 @@ fn worker_loop(
         match model.run(&frame.data, frame.width, frame.height) {
             Ok(Some(hand)) => {
                 let detected = if hand.confidence >= CONFIDENCE_THRESHOLD {
-                    gesture_classifier::classify(&hand.landmarks).unwrap_or(GestureAction::None)
+                    gesture_classifier::classify(&hand.landmarks, hand.handedness)
+                        .unwrap_or(GestureAction::None)
                 } else {
                     GestureAction::None
                 };

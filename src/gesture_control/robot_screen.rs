@@ -4,12 +4,13 @@
 //! - IP textbox (left side) — driven by `AppPreferences::robot_control_ip`
 //! - Status indicator (grey/yellow/green/red dot)
 //! - Last-gesture readout
+//! - Continuous inference: while the camera is open, every fresh frame is
+//!   pushed to the background `InferenceWorker`; recognized gestures are
+//!   emitted automatically.
+//! - Manual-control buttons (D-pad cross + Catch/Release) for firing each
+//!   `GestureAction` by hand, bypassing the ML pipeline.
 //! - Recent commands log (rolling, ~8 lines)
-//! - Six test buttons (one per `GestureAction`) so the HTTP pipeline can be
-//!   exercised on the desk without the webcam pipeline being live yet.
-//! - Camera preview area — currently a "Camera offline" placeholder.
-//!   The real `GestureWebcamView` (NV12→texture upload + landmark overlay) is
-//!   wired in once the ONNX models are pinned, per the task spec.
+//! - Camera preview area — Makepad `Video` widget in Native preview mode.
 
 use std::time::Instant;
 
@@ -19,7 +20,7 @@ use makepad_widgets::video::VideoCameraPreviewMode;
 use crate::gesture_control::{
     GestureAction,
     inference_worker::InferenceWorker,
-    robot_http::{HttpOutcome, RobotHttpSender, validate_ip},
+    robot_http::{HttpOutcome, HttpResult, RobotHttpSender, validate_ip},
 };
 
 // Platform-conditional inference frame source. On macOS we open a parallel
@@ -186,16 +187,12 @@ script_mod! {
 
             spacer2 := View { width: Fill, height: 8 }
 
-            // Camera toggle.
+            // Camera toggle. Inference runs continuously while the camera is
+            // open — no manual "Infer" button.
             btn_camera := Button {
                 text: "Open camera"
                 width: Fill, height: 36
-            }
-
-            // One-shot gesture inference on the current webcam frame.
-            btn_infer := Button {
-                text: "Infer gesture"
-                width: Fill, height: 36
+                draw_text +: { color: #x000000 }
             }
 
             inference_caption := Label {
@@ -215,28 +212,75 @@ script_mod! {
 
             spacer_cam := View { width: Fill, height: 8 }
 
-            // Six test buttons — fire each gesture without the camera.
+            // Manual control buttons — fire each gesture without the camera.
+            // Directional buttons are arrayed in a cross (D-pad) layout; the
+            // catch/release pair sits below.
             test_label := Label {
-                text: "Test"
+                text: "Manual control"
                 draw_text +: {
                     color: #x404040
                     text_style: theme.font_regular { font_size: 12.0 }
                 }
             }
-            test_row1 := View {
-                width: Fill, height: Fit, flow: Right, spacing: 6
-                btn_forward := Button { text: "▲" width: Fill height: 32 }
-                btn_back    := Button { text: "▼" width: Fill height: 32 }
-            }
-            test_row2 := View {
-                width: Fill, height: Fit, flow: Right, spacing: 6
-                btn_left  := Button { text: "◀" width: Fill height: 32 }
-                btn_right := Button { text: "▶" width: Fill height: 32 }
+            cross_pad := View {
+                width: Fill, height: Fit, flow: Down, spacing: 6
+                align: Align{x: 0.5}
+
+                cross_row_up := View {
+                    width: Fit, height: Fit, flow: Right
+                    btn_forward := Button {
+                        text: "▲"
+                        width: 56, height: 36
+                        draw_bg +: { color: #xCCCCCC }
+                        draw_text +: { color: #x000000 }
+                    }
+                }
+                cross_row_mid := View {
+                    width: Fit, height: Fit, flow: Right, spacing: 6
+                    align: Align{y: 0.5}
+                    btn_left := Button {
+                        text: "◀"
+                        width: 56, height: 36
+                        draw_bg +: { color: #xCCCCCC }
+                        draw_text +: { color: #x000000 }
+                    }
+                    btn_stop := Button {
+                        text: "⏹"
+                        width: 56, height: 36
+                        draw_bg +: { color: #xCCCCCC }
+                        draw_text +: { color: #x000000 }
+                    }
+                    btn_right := Button {
+                        text: "▶"
+                        width: 56, height: 36
+                        draw_bg +: { color: #xCCCCCC }
+                        draw_text +: { color: #x000000 }
+                    }
+                }
+                cross_row_down := View {
+                    width: Fit, height: Fit, flow: Right
+                    btn_back := Button {
+                        text: "▼"
+                        width: 56, height: 36
+                        draw_bg +: { color: #xCCCCCC }
+                        draw_text +: { color: #x000000 }
+                    }
+                }
             }
             test_row3 := View {
                 width: Fill, height: Fit, flow: Right, spacing: 6
-                btn_catch := Button { text: "✊ Catch" width: Fill height: 32 }
-                btn_drop  := Button { text: "🖐 Drop"  width: Fill height: 32 }
+                btn_catch := Button {
+                    text: "✊ Catch"
+                    width: Fill, height: 32
+                    draw_bg +: { color: #xCCCCCC }
+                    draw_text +: { color: #x000000 }
+                }
+                btn_drop := Button {
+                    text: "🖐 Release"
+                    width: Fill, height: 32
+                    draw_bg +: { color: #xCCCCCC }
+                    draw_text +: { color: #x000000 }
+                }
             }
 
             spacer3 := View { width: Fill, height: 8 }
@@ -323,21 +367,34 @@ pub struct RobotScreen {
     #[rust] camera_running: bool,
     /// Active background camera worker. `None` when camera is off.
     #[rust] capture: Option<InferenceCapture>,
-    /// Most recent RGBA frame received from the worker. Reused by the
-    /// "Infer gesture" button — we never re-grab from the camera on click.
-    #[rust] latest_frame: Option<WebRtcVideoFrame>,
     /// Hand-landmark ONNX inference worker. `Some` once the model has been
     /// successfully loaded; `None` if load failed or hasn't been attempted.
     #[rust] inference: Option<InferenceWorker>,
     /// Set once we've tried to load the model and failed — keeps us from
     /// re-attempting load on every click.
     #[rust] inference_load_failed: bool,
+    /// Which manual-control button is currently lit. `None` means all six are
+    /// at their idle colour. Used to avoid redundant `script_apply_eval!` calls
+    /// when continuous inference keeps emitting the same gesture.
+    #[rust] highlighted_action: Option<GestureAction>,
+    /// Wall-clock instant at which the current button highlight should fade.
+    /// `None` means no active highlight.
+    #[rust] highlight_clear_at: Option<Instant>,
 }
 
 const MAX_RECENT_LINES: usize = 8;
 const GREEN_WINDOW_SECS: u64 = 5;
 /// How long the on-video gesture pill stays visible after a detection.
 const OVERLAY_HOLD_MS: u64 = 1_500;
+/// How long a manual-control button stays highlighted after the most recent
+/// gesture emit (continuous inference refreshes the timer each frame).
+const HIGHLIGHT_HOLD_MS: u64 = 600;
+/// Idle background colour for the six manual-control buttons. Matches the
+/// `#xCCCCCC` constant set on each `draw_bg` in the DSL.
+const COLOR_BTN_DEFAULT: Vec4 = Vec4 { x: 0.8, y: 0.8, z: 0.8, w: 1.0 };
+/// Highlight background colour applied to the button whose `GestureAction`
+/// the inference most recently emitted.
+const COLOR_BTN_HIGHLIGHT: Vec4 = Vec4 { x: 1.0, y: 0.8, z: 0.0, w: 1.0 };
 
 impl Widget for RobotScreen {
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
@@ -352,17 +409,32 @@ impl Widget for RobotScreen {
             self.initialize_from_prefs(cx);
         }
 
-        // Each NextFrame: drain HTTP results, refresh the green-window (so
-        // the dot drops back from green → yellow after 5 s of silence),
-        // auto-hide the gesture overlay pill after its hold window expires,
-        // and pull the latest camera frame from the worker into the
-        // WebRtcVideo widget.
+        // Each NextFrame: refresh the green-window (so the dot drops back
+        // from green → yellow after 5 s of silence), auto-hide the gesture
+        // overlay pill after its hold window expires, and pull the latest
+        // camera frame from the worker into the WebRtcVideo widget.
         if matches!(event, Event::NextFrame(_)) {
-            self.drain_http_results(cx);
             self.refresh_green_window(cx);
             self.refresh_overlay_visibility(cx);
+            self.refresh_button_highlight(cx);
             self.pump_camera_frames(cx);
             self.pump_inference_results(cx);
+            cx.new_next_frame();
+        }
+
+        // HTTP results arrive on the standard NetworkResponses bus (no tokio
+        // task — we use Makepad's cx.http_request now). Filter by request_id
+        // inside the sender, then update UI state for each matched result.
+        if let Event::NetworkResponses(responses) = event {
+            for response in responses {
+                let result = self
+                    .http
+                    .as_mut()
+                    .and_then(|s| s.handle_network_response(response));
+                if let Some(result) = result {
+                    self.apply_http_result(cx, result);
+                }
+            }
         }
 
         self.view.handle_event(cx, event, scope);
@@ -424,10 +496,15 @@ impl RobotScreen {
             self.commit_ip(cx, &text);
         }
         if let Some(text) = changed_text {
-            // Live validation for the connection indicator: invalid IP → grey,
-            // valid IP keeps whatever live state we're in. We do NOT persist
-            // here — persistence happens on Returned.
-            let next = match (validate_ip(&text).is_some(), self.conn) {
+            // Live validation for the connection indicator AND for the
+            // send-time IP cache: invalid IP → grey + clear self.valid_ip,
+            // valid IP keeps whatever live state we're in and updates the
+            // cache so movement-button clicks fire without requiring the
+            // user to press Enter first. We do NOT persist to AppPreferences
+            // here — persistence still happens on Returned via commit_ip.
+            let parsed = validate_ip(&text);
+            self.valid_ip = parsed.clone();
+            let next = match (parsed.is_some(), self.conn) {
                 (false, _) => ConnState::Grey,
                 (true, ConnState::Green) => ConnState::Green,
                 (true, _) => ConnState::Yellow,
@@ -444,22 +521,41 @@ impl RobotScreen {
             }
         }
 
-        // Run a one-shot inference against the current webcam frame.
-        if self.view.button(cx, ids!(btn_infer)).clicked(actions) {
-            self.infer_gesture(cx);
-        }
-
-        // Test buttons fire gestures directly, bypassing the (not-yet-wired)
-        // ML pipeline so the HTTP path can be exercised on the desk.
-        let fire_map = [
+        // Movement buttons follow a press-and-hold pattern: pressing fires
+        // the directional command, releasing fires Stop. Catch/Drop remain
+        // one-shot (clicked → command, no Stop on release) because the robot
+        // treats grab/release as latching actions.
+        let movement_map = [
             (ids!(btn_forward), GestureAction::Forward),
             (ids!(btn_back),    GestureAction::Back),
             (ids!(btn_left),    GestureAction::Left),
             (ids!(btn_right),   GestureAction::Right),
-            (ids!(btn_catch),   GestureAction::Catch),
-            (ids!(btn_drop),    GestureAction::Drop),
         ];
-        for (id_path, action) in fire_map {
+        let mut any_movement_released = false;
+        for (id_path, action) in movement_map {
+            let btn = self.view.button(cx, id_path);
+            if btn.pressed(actions) {
+                self.emit_gesture(cx, action);
+            }
+            if btn.clicked(actions) || btn.released(actions) {
+                any_movement_released = true;
+            }
+        }
+        if any_movement_released {
+            self.fire_command(cx, GestureAction::Stop);
+        }
+
+        // Center button — fires Stop without going through emit_gesture
+        // (no overlay flash, no "Last gesture" overwrite, no D-pad highlight).
+        if self.view.button(cx, ids!(btn_stop)).clicked(actions) {
+            self.fire_command(cx, GestureAction::Stop);
+        }
+
+        let oneshot_map = [
+            (ids!(btn_catch), GestureAction::Catch),
+            (ids!(btn_drop),  GestureAction::Drop),
+        ];
+        for (id_path, action) in oneshot_map {
             if self.view.button(cx, id_path).clicked(actions) {
                 self.emit_gesture(cx, action);
             }
@@ -489,7 +585,8 @@ impl RobotScreen {
         }
     }
 
-    /// Emit a gesture: action bus + HTTP send + update last_gesture.
+    /// Emit a gesture: action bus + HTTP send + update last_gesture +
+    /// light up the matching manual-control button.
     fn emit_gesture(&mut self, cx: &mut Cx, action: GestureAction) {
         self.last_gesture = action;
         self.view
@@ -499,52 +596,100 @@ impl RobotScreen {
 
         // Flash the gesture pill on top of the webcam preview.
         self.show_overlay(cx, action);
+        // Light up the corresponding manual-control button (and unlight any
+        // previously-lit one).
+        self.highlight_action_button(cx, action);
 
-        // Send over HTTP if we have a valid IP. We bind the IP up-front so the
-        // borrow of `self` for `http_sender()` doesn't overlap with `self.view`.
-        if let Some(ip) = self.valid_ip.clone() {
-            self.ensure_http_sender();
-            if let Some(sender) = self.http.as_ref() {
-                sender.send(action, ip);
-            }
+        // Grab and Release are gripper actions — halt any in-flight movement
+        // before actuating so the arm isn't being driven while it grabs.
+        if matches!(action, GestureAction::Catch | GestureAction::Drop) {
+            self.fire_command(cx, GestureAction::Stop);
         }
+        self.fire_command(cx, action);
         self.view.redraw(cx);
     }
 
-    /// Lazily spawn the tokio HTTP task on first use.
-    fn ensure_http_sender(&mut self) {
-        if self.http.is_some() {
+    /// Fire an HTTP control command without touching gesture-display state.
+    /// Used both by `emit_gesture` and by the movement-button-release path,
+    /// which sends `GestureAction::Stop` but should not overwrite the
+    /// "Last gesture" readout or flash the overlay.
+    fn fire_command(&mut self, cx: &mut Cx, action: GestureAction) {
+        println!("valid_ip {:?}", self.valid_ip);
+        let Some(ip) = self.valid_ip.clone() else { return };
+        self.ensure_http_sender();
+        if let Some(sender) = self.http.as_mut() {
+            sender.send(cx, action, &ip);
+        }
+    }
+
+    /// Apply the highlight colour to the button matching `action`, default
+    /// colour to all others. Skips work if `action` is already highlighted —
+    /// continuous inference repeatedly emits the same gesture and we don't
+    /// want to re-run six `script_apply_eval!`s every frame.
+    fn highlight_action_button(&mut self, cx: &mut Cx, action: GestureAction) {
+        let new_highlight = match action {
+            GestureAction::None => None,
+            other => Some(other),
+        };
+        // Refresh the fade-out timer on every call, even if the highlighted
+        // button hasn't changed — the timer is what keeps the light on while
+        // the user holds a pose against continuous inference.
+        self.highlight_clear_at =
+            Some(Instant::now() + std::time::Duration::from_millis(HIGHLIGHT_HOLD_MS));
+        if self.highlighted_action == new_highlight {
             return;
         }
-        match crate::sliding_sync::start_matrix_tokio() {
-            Ok(handle) => self.http = Some(RobotHttpSender::spawn(handle)),
-            Err(e) => {
-                log!("RobotScreen: failed to start tokio for HTTP sender: {e}");
+        self.apply_button_colors(cx, new_highlight);
+        self.highlighted_action = new_highlight;
+    }
+
+    /// Walk all six manual-control buttons and set each `draw_bg.color` to
+    /// either `COLOR_BTN_HIGHLIGHT` (if it matches `current`) or
+    /// `COLOR_BTN_DEFAULT`. Called from `highlight_action_button` and from
+    /// the timer-driven fade-out path.
+    fn apply_button_colors(&mut self, cx: &mut Cx, current: Option<GestureAction>) {
+        let buttons = [
+            (GestureAction::Forward, ids!(btn_forward)),
+            (GestureAction::Back,    ids!(btn_back)),
+            (GestureAction::Left,    ids!(btn_left)),
+            (GestureAction::Right,   ids!(btn_right)),
+            (GestureAction::Catch,   ids!(btn_catch)),
+            (GestureAction::Drop,    ids!(btn_drop)),
+        ];
+        for (act, id_path) in buttons {
+            let color = if Some(act) == current {
+                COLOR_BTN_HIGHLIGHT
+            } else {
+                COLOR_BTN_DEFAULT
+            };
+            let mut btn = self.view.button(cx, id_path);
+            script_apply_eval!(cx, btn, {
+                draw_bg +: { color: #(color) }
+            });
+        }
+    }
+
+    /// Drop the highlight back to idle once the hold window expires.
+    fn refresh_button_highlight(&mut self, cx: &mut Cx) {
+        if let Some(deadline) = self.highlight_clear_at {
+            if Instant::now() >= deadline {
+                self.apply_button_colors(cx, None);
+                self.highlighted_action = None;
+                self.highlight_clear_at = None;
+                self.view.redraw(cx);
             }
         }
     }
 
-    fn drain_http_results(&mut self, cx: &mut Cx) {
-        // Drain into a local buffer first so the immutable borrow of
-        // `self.http` is released before we call `self.apply_http_result`,
-        // which needs `&mut self`.
-        let drained: Vec<crate::gesture_control::robot_http::HttpResult> = if let Some(s) = self.http.as_ref() {
-            std::iter::from_fn(|| s.try_recv()).collect()
-        } else {
-            Vec::new()
-        };
-        for result in drained {
-            self.apply_http_result(cx, result);
+    /// Lazily build the HTTP sender on first use. Now just allocates the
+    /// pending-request map — no tokio task involved.
+    fn ensure_http_sender(&mut self) {
+        if self.http.is_none() {
+            self.http = Some(RobotHttpSender::new());
         }
-        // Keep polling each frame.
-        cx.new_next_frame();
     }
 
-    fn apply_http_result(
-        &mut self,
-        cx: &mut Cx,
-        result: crate::gesture_control::robot_http::HttpResult,
-    ) {
+    fn apply_http_result(&mut self, cx: &mut Cx, result: HttpResult) {
         let (state, line) = match &result.outcome {
             HttpOutcome::Ok { status, latency_ms } => {
                 self.last_green_at = Some(Instant::now());
@@ -556,10 +701,6 @@ impl RobotScreen {
             HttpOutcome::HttpStatus { status } => (
                 ConnState::Red,
                 format!("{} HTTP {}", result.action.display_label(), status),
-            ),
-            HttpOutcome::Timeout => (
-                ConnState::Yellow,
-                format!("{} timeout", result.action.display_label()),
             ),
             HttpOutcome::Error(e) => (
                 ConnState::Red,
@@ -610,34 +751,14 @@ impl RobotScreen {
         self.view.redraw(cx);
     }
 
-    /// Run a one-shot gesture inference against the most recently received
-    /// webcam frame.
+    /// Submit a fresh camera frame to the background `InferenceWorker` for
+    /// continuous classification. The worker's bounded(1) input channel
+    /// naturally throttles us — if it's still busy with the previous frame,
+    /// `try_send` returns Full and we drop this one, keeping the latency low.
     ///
-    /// Submits the latest frame to the background `InferenceWorker`. The
-    /// worker runs the hand-landmark ONNX model (single-stage, center-crop)
-    /// and pushes a result on its result channel; `pump_inference_results`
-    /// drains that channel on each `NextFrame` and updates the UI.
-    ///
-    /// On the user side this still looks one-shot: press the button, see the
-    /// label update on the next frame tick.
-    fn infer_gesture(&mut self, cx: &mut Cx) {
-        if !self.camera_running {
-            self.view
-                .label(cx, ids!(inference_value))
-                .set_text(cx, "(open camera first)");
-            self.view.redraw(cx);
-            return;
-        }
-        let Some(frame) = self.latest_frame.clone() else {
-            self.view
-                .label(cx, ids!(inference_value))
-                .set_text(cx, "(no frame yet)");
-            self.view.redraw(cx);
-            return;
-        };
-
-        // Lazy-load the model on first click so a model-file failure shows up
-        // as a one-time "(model unavailable)" rather than blocking tab open.
+    /// The model is lazy-loaded on the first frame so a missing/corrupt ONNX
+    /// surfaces as a one-time log line rather than blocking tab open.
+    fn submit_frame_for_inference(&mut self, frame: WebRtcVideoFrame) {
         if self.inference.is_none() && !self.inference_load_failed {
             match InferenceWorker::spawn() {
                 Ok(w) => self.inference = Some(w),
@@ -647,23 +768,9 @@ impl RobotScreen {
                 }
             }
         }
-
-        let Some(worker) = self.inference.as_ref() else {
-            self.view
-                .label(cx, ids!(inference_value))
-                .set_text(cx, "(model unavailable)");
-            self.view.redraw(cx);
-            return;
-        };
-
-        if worker.submit(frame) {
-            self.view
-                .label(cx, ids!(inference_value))
-                .set_text(cx, "(inferring…)");
-            self.view.redraw(cx);
+        if let Some(worker) = self.inference.as_ref() {
+            let _ = worker.submit(frame);
         }
-        // If submit returned false the worker is still busy with the previous
-        // frame; the next NextFrame will deliver that result anyway.
     }
 
     /// Drain any inference results delivered by the background worker, update
@@ -684,6 +791,14 @@ impl RobotScreen {
                     .label(cx, ids!(inference_value))
                     .set_text(cx, text);
                 self.view.redraw(cx);
+                // No gesture detected → halt the robot. Dedup against the
+                // previously-emitted gesture so a hand-out-of-frame stretch
+                // doesn't flood the wire with stop requests — we only fire
+                // Stop on the first frame of "no gesture" after movement.
+                if !matches!(self.last_gesture, GestureAction::None | GestureAction::Stop) {
+                    self.fire_command(cx, GestureAction::Stop);
+                    self.last_gesture = GestureAction::Stop;
+                }
             } else {
                 log!("RobotScreen: inferred gesture: {:?}", result.detected);
                 self.view
@@ -758,7 +873,6 @@ impl RobotScreen {
         // Drop the receiver — the Makepad-side callback stays registered but
         // its try_send becomes a silent no-op.
         self.capture = None;
-        self.latest_frame = None;
         self.camera_running = false;
         self.view.video(cx, ids!(preview_video)).set_visible(cx, false);
         self.view.view(cx, ids!(placeholder_layer)).set_visible(cx, true);
@@ -771,18 +885,19 @@ impl RobotScreen {
         self.view.redraw(cx);
     }
 
-    /// Pull pending frames from the camera callback into the latest_frame
-    /// cache for the Infer button. Display is handled by Makepad's Video
-    /// widget directly — we don't push frames to it ourselves.
+    /// Pull pending frames from the camera callback and forward the newest to
+    /// the inference worker. Display is handled by Makepad's Video widget
+    /// directly — we don't push frames to it ourselves.
     fn pump_camera_frames(&mut self, _cx: &mut Cx) {
         let Some(cap) = self.capture.as_ref() else { return };
-        // Drain anything backed up; we only keep the newest.
+        // Drain anything backed up; we only keep the newest so inference always
+        // runs on the freshest possible frame.
         let mut newest: Option<WebRtcVideoFrame> = None;
         while let Some(f) = cap.try_recv() {
             newest = Some(f);
         }
         if let Some(frame) = newest {
-            self.latest_frame = Some(frame);
+            self.submit_frame_for_inference(frame);
         }
     }
 

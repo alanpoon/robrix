@@ -35,33 +35,41 @@ pub enum GestureAction {
     /// No gesture detected this frame, or below confidence threshold.
     #[default]
     None,
-    /// Index finger pointing up.
+    /// Thumbs up (thumb extended upward, other fingers curled).
     Forward,
-    /// Index finger pointing down.
+    /// Thumbs down (thumb extended downward, other fingers curled).
     Back,
-    /// Index finger pointing to the user's left (after mirror correction).
+    /// Two-finger peace sign (index + middle extended) shown with the user's
+    /// left hand, identified via the hand-landmark model's handedness output.
     Left,
-    /// Index finger pointing to the user's right (after mirror correction).
+    /// Two-finger peace sign (index + middle extended) shown with the user's
+    /// right hand, identified via the hand-landmark model's handedness output.
     Right,
     /// Closed fist (no fingers extended).
     Catch,
     /// Open palm (all five fingers extended).
     Drop,
+    /// Stop command — emitted when a movement button is released, never by
+    /// the ML classifier. Not displayed in the on-video overlay or "Last
+    /// gesture" readout; only logged via the HTTP recent-commands feed.
+    Stop,
 }
 
 impl GestureAction {
-    /// Lowercase wire name used as the `"action"` value in the HTTP JSON body.
-    /// Returns `None` for `GestureAction::None` — callers should not send a
-    /// request when no gesture is detected.
+    /// Lowercase wire name used as the `"action"` query parameter against
+    /// `http://{ip}/api/control?action=…&speed=50`. Returns `None` for
+    /// `GestureAction::None` — callers should not send a request when no
+    /// gesture is detected.
     pub fn wire_name(self) -> Option<&'static str> {
         match self {
             GestureAction::None => None,
-            GestureAction::Forward => Some("forward"),
-            GestureAction::Back => Some("back"),
+            GestureAction::Forward => Some("up"),
+            GestureAction::Back => Some("down"),
             GestureAction::Left => Some("left"),
             GestureAction::Right => Some("right"),
-            GestureAction::Catch => Some("catch"),
-            GestureAction::Drop => Some("drop"),
+            GestureAction::Catch => Some("grab"),
+            GestureAction::Drop => Some("release"),
+            GestureAction::Stop => Some("stop"),
         }
     }
 
@@ -73,8 +81,9 @@ impl GestureAction {
             GestureAction::Back => "Back",
             GestureAction::Left => "Left",
             GestureAction::Right => "Right",
-            GestureAction::Catch => "Catch",
-            GestureAction::Drop => "Drop",
+            GestureAction::Catch => "Grab",
+            GestureAction::Drop => "Release",
+            GestureAction::Stop => "Stop",
         }
     }
 
@@ -88,6 +97,7 @@ impl GestureAction {
             GestureAction::Right => "▶",
             GestureAction::Catch => "✊",
             GestureAction::Drop => "🖐",
+            GestureAction::Stop => "⏹",
         }
     }
 }
