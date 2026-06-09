@@ -19,30 +19,17 @@ pub struct CameraChoice {
 pub struct CameraManager;
 
 impl CameraManager {
-    /// Pick the best camera format from available options.
-    ///
-    /// Prefers the front-facing camera (selfie) by name — Android's
-    /// Camera2 NDK exposes devices named "Front Camera" / "Back Camera",
-    /// and the front one is what both the VoIP lobby (video call self-view)
-    /// and the Robot tab (gesture recognition of the user's hand in front
-    /// of the screen) want. We match on case-insensitive substring so
-    /// other platforms' naming variants ("FaceTime HD Camera", "User
-    /// Facing Camera", etc.) get a fair shot too — falls back to the first
-    /// enumerated device if no front match exists (e.g. external webcam,
-    /// OBS Virtual Camera).
+    /// Pick the best camera format from available options
     pub fn pick_camera_choice(ev: &VideoInputsEvent) -> Option<CameraChoice> {
-        fn looks_like_front(name: &str) -> bool {
-            let n = name.to_ascii_lowercase();
-            n.contains("front")
-                || n.contains("user")
-                || n.contains("facetime")
-                || n.contains("selfie")
+        let desc = ev.descs.first()?;
+
+        log!("Camera: {} has {} formats", desc.name, desc.formats.len());
+        for (i, fmt) in desc.formats.iter().enumerate() {
+            log!(
+                "  Format {}: {}x{} {:?} fps={:?}",
+                i, fmt.width, fmt.height, fmt.pixel_format, fmt.frame_rate
+            );
         }
-        let desc = ev
-            .descs
-            .iter()
-            .find(|d| looks_like_front(&d.name))
-            .or_else(|| ev.descs.first())?;
 
         fn pixel_rank(pixel_format: VideoPixelFormat) -> usize {
             match pixel_format {
@@ -74,26 +61,58 @@ impl CameraManager {
         }
 
         let mut best: Option<makepad_widgets::makepad_platform::video::VideoFormat> = None;
+
+        // Pass 1: NV12 at <= 1080p (preferred)
         for fmt in &desc.formats {
+            if fmt.pixel_format != VideoPixelFormat::NV12 {
+                continue;
+            }
+            if fmt.width > 1920 || fmt.height > 1080 {
+                continue;
+            }
             if best.as_ref().is_none_or(|b| better(fmt, b)) {
                 best = Some(*fmt);
             }
         }
-        let format = best?;
 
-        if pixel_rank(format.pixel_format) == 0 {
-            log!(
-                "Camera: NOTE — selected format on '{}' is {:?}, which Makepad's \
-                 frame callback does not dispatch. Display via Native preview \
-                 still works; the Robot tab's Infer button will report \
-                 \"(no frame yet)\" until BGRA capture is wired in.",
-                desc.name, format.pixel_format
-            );
+        // Pass 2: any NV12
+        if best.is_none() {
+            for fmt in &desc.formats {
+                if fmt.pixel_format != VideoPixelFormat::NV12 {
+                    continue;
+                }
+                if best.as_ref().is_none_or(|b| better(fmt, b)) {
+                    best = Some(*fmt);
+                }
+            }
         }
-        log!(
-            "Camera: selected '{}' {}x{} {:?}",
-            desc.name, format.width, format.height, format.pixel_format
-        );
+
+        // Pass 3: YUY2 or YUV420
+        if best.is_none() {
+            for fmt in &desc.formats {
+                if !matches!(fmt.pixel_format, VideoPixelFormat::YUY2 | VideoPixelFormat::YUV420) {
+                    continue;
+                }
+                if best.as_ref().is_none_or(|b| better(fmt, b)) {
+                    best = Some(*fmt);
+                }
+            }
+        }
+
+        // Pass 4: Any format (fallback)
+        if best.is_none() {
+            log!("No preferred format found, taking first available format...");
+            best = desc.formats.first().copied();
+        }
+
+        let format = match best {
+            Some(f) => f,
+            None => {
+                log!("No camera format available!");
+                return None;
+            }
+        };
+        log!("Selected format: {}x{} {:?}", format.width, format.height, format.pixel_format);
 
         Some(CameraChoice {
             input_id: desc.input_id,

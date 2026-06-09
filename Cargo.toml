@@ -14,8 +14,8 @@ version = "1.0.0-alpha.1"
 metadata.makepad-auto-version = "zqpv-Yj-K7WNVK2I8h5Okhho46Q="
 
 [dependencies]
-makepad-widgets = { git = "https://github.com/alanpoon/makepad", branch = "video_player_fix_android", features = ["serde"] }
-makepad-code-editor = { git = "https://github.com/alanpoon/makepad", branch = "video_player_fix_android" }
+makepad-widgets = { git = "https://github.com/makepad/makepad", branch = "dev", features = ["serde"] }
+makepad-code-editor = { git = "https://github.com/makepad/makepad", branch = "dev" }
 
 
 ## Including this crate automatically configures all `robius-*` crates to work with Makepad.
@@ -76,32 +76,8 @@ serde_json = "1.0"
 thiserror = "2.0.16"
 tokio = { version = "1.43.1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = "0.3.17"
-## Hand-gesture robot control: pure-Rust ONNX inference for the Robot tab.
-## Default features include the ONNX parser used by `hand_model::HandModel::load`.
-tract-onnx = "0.21"
-sha2 = "0.10"
 unicode-segmentation = "1.11.0"
 url = "2.5.0"
-
-## Objective-C runtime for the parallel AVFoundation video capture used by
-## the Robot tab on macOS. Same major version as the one Makepad already
-## pulls transitively, so no duplicate compilation.
-[target.'cfg(target_os = "macos")'.dependencies]
-objc = "0.2"
-
-
-## Android needs a custom rustls ClientConfig wired into our reqwest::Client
-## (see proxy_config::android_setup_webkpi_verifier). rustls-platform-verifier
-## (reqwest's default) panics on Android without a JNI/Kotlin shim, so we
-## sidestep it by preconfiguring rustls with webpki-roots + native-certs —
-## the same workaround matrix-sdk applies internally and the same shape the
-## livekit-rs mobile example uses for its TLS path.
-[target.'cfg(target_os = "android")'.dependencies]
-rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
-rustls-native-certs = "0.8"
-rustls-pki-types = { version = "1", features = ["std"] }
-webpki-roots = "1.0"
-
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 rfd = "0.15"
@@ -113,6 +89,7 @@ nokhwa = { version = "0.10", features = ["input-native"] }
 ## LiveKit WebRTC SDK - only for desktop platforms (macOS, Linux)
 ## Windows is excluded due to MSVC runtime library mismatch with webrtc-sys
 ## rustls-tls-native-roots is required for WSS connections
+[target.'cfg(all(not(any(target_os = "android", target_os = "ios", target_os = "windows"))))'.dependencies]
 livekit = { version = "0.7", features = ["rustls-tls-native-roots"] }
 
 ## Dependencies for TSP support.
@@ -194,25 +171,6 @@ askar-storage = { git = "https://github.com/openwallet-foundation/askar.git" }
 ## so we patch the git source, not crates-io.
 [patch."https://github.com/ruma/ruma"]
 ruma = { git = "https://github.com/project-robius/ruma.git", branch = "tsp" }
-
-
-## Redirect the makepad git dependencies (which point at the
-## `alanpoon/makepad` fork on the `video_player_fix_android` branch) to a
-## local clone in `../makepad-patched`. That clone is checked out to the
-## `robrix-android-patches` branch — its base is `video_player_fix_android`
-## with one additional commit applied on top:
-##   * `android_media::camera_frame_input_box` now calls
-##     `AndroidCameraAccess::reconcile_streams()` after storing the callback,
-##     so a `cx.camera_frame_input(0, …)` registration triggers a session
-##     rebuild and the `ImageReader` output target actually gets attached.
-##     Without this, the Robot tab's inference pipeline never receives
-##     frames on Android (logcat 2026-06-09 10:53:56 "pipeline stuck —
-##     capture=true, first_frame_seen=false").
-##
-## To take this patch upstream into the fork, push the
-## `robrix-android-patches` branch back to `alanpoon/makepad` (or fast-
-## forward `video_player_fix_android` to it) and the `[patch]` block below
-## becomes redundant.
 
 [build-dependencies]
 toml = "1"

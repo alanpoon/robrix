@@ -249,46 +249,8 @@ pub fn build_policy_reqwest_client(
     if let Some(timeout) = timeout {
         builder = builder.timeout(timeout);
     }
-    // On Android the rustls-platform-verifier that reqwest's default
-    // `rustls` feature ships requires a Kotlin/JNI init step we can't run
-    // through cargo-makepad's javac-only pipeline. Mirror matrix-sdk's
-    // workaround and preconfigure rustls with webpki-roots + native-certs so
-    // platform-verifier never gets called.
-    #[cfg(target_os = "android")]
-    {
-        builder = android_setup_webkpi_verifier(builder)?;
-    }
     let builder = apply_policy_to_reqwest_builder(builder, proxy_url)?;
     Ok(builder.build()?)
-}
-
-/// Build a rustls `ClientConfig` with WebPKI verification backed by
-/// `webpki-roots` (Mozilla trust list, baked in) plus whatever Android's
-/// system trust store (`/system/etc/security/cacerts`) makes available via
-/// `rustls-native-certs`. We feed it into reqwest with
-/// `tls_backend_preconfigured`, which makes reqwest skip its default
-/// platform-verifier construction entirely — that's the call path that
-/// panics on Android without a Kotlin shim.
-#[cfg(target_os = "android")]
-fn android_setup_webkpi_verifier(
-    builder: ClientBuilder,
-) -> anyhow::Result<ClientBuilder> {
-    use std::sync::Arc;
-
-    use rustls::{ClientConfig, RootCertStore, client::WebPkiServerVerifier};
-
-    let mut root_store = RootCertStore::empty();
-    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let native_certs = rustls_native_certs::load_native_certs().certs;
-    root_store.add_parsable_certificates(native_certs);
-
-    let verifier = WebPkiServerVerifier::builder(Arc::new(root_store))
-        .build()
-        .map_err(|e| anyhow::anyhow!("WebPkiServerVerifier::build failed: {e}"))?;
-    let config = ClientConfig::builder()
-        .with_webpki_verifier(verifier)
-        .with_no_client_auth();
-    Ok(builder.tls_backend_preconfigured(config))
 }
 
 #[cfg(test)]

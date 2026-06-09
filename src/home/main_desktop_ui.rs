@@ -10,7 +10,7 @@ use crate::{
     persistence,
     sliding_sync::{AccountSwitchAction, current_user_id, get_client},
     utils::RoomNameId,
-    voip::{CameraConsumer, VoipAction, VoipGlobalState, VoipScreenWidgetRefExt},
+    voip::{VoipAction, VoipGlobalState, VoipScreenWidgetRefExt},
 };
 use super::{invite_screen::InviteScreenWidgetRefExt, room_screen::RoomScreenWidgetRefExt, rooms_list::RoomsListAction};
 
@@ -49,7 +49,7 @@ script_mod! {
             }
 
             main_tabs := DockTabs{
-                tabs: [@home_tab, @robot_tab]
+                tabs: [@home_tab]
                 selected: 0
             }
 
@@ -64,12 +64,6 @@ script_mod! {
                 template: @PermanentTab
             }
 
-            robot_tab := DockTab{
-                name: "Robot"
-                kind: @robot_screen
-                template: @PermanentTab
-            }
-
             // Below are the templates of widgets that can be created within dock tabs.
             rooms_sidebar := mod.widgets.RoomsSideBar {}
             welcome_screen := mod.widgets.WelcomeScreen {}
@@ -77,7 +71,6 @@ script_mod! {
             invite_screen := mod.widgets.InviteScreen {}
             space_lobby_screen := mod.widgets.SpaceLobbyScreen {}
             voip_screen := mod.widgets.VoipScreen {}
-            robot_screen := mod.widgets.RobotScreen {}
         }
     }
 }
@@ -288,15 +281,20 @@ impl MainDesktopUI {
                 }
             } else {
                 // If there is no room to focus, notify app to reset the selected room in the app state
+                log!("No more rooms to focus, selecting home_tab");
                 cx.action(AppStateAction::FocusNone);
                 dock.select_tab(cx, id!(home_tab));
                 self.most_recently_selected_room = None;
             }
+        } else {
+            log!("Room not found in open_rooms for tab_id: {:?}", tab_id);
         }
 
+        log!("Calling dock.close_tab for tab_id: {:?}", tab_id);
         dock.close_tab(cx, tab_id);
         self.tab_to_close = None;
         self.open_rooms.remove(&tab_id);
+        log!("Tab closed, open_rooms now has {} tabs", self.open_rooms.len());
     }
 
     /// Closes every open tab belonging to the given room, including thread tabs.
@@ -535,19 +533,6 @@ impl WidgetMatchEvent for MainDesktopUI {
                             cx.action(VoipAction::ShowPip { room_id: room_id.clone() });
                         }
                     }
-
-                    // Camera handoff: tell whichever screen is the new tab's
-                    // owner that it has the camera; tabs that don't use the
-                    // camera fire `Idle` so any previous holder (Robot tab,
-                    // VoIP lobby) releases it.
-                    let new_consumer = if tab_id == id!(robot_tab) {
-                        CameraConsumer::Robot
-                    } else if matches!(&new_room, Some(SelectedRoom::Voip { .. })) {
-                        CameraConsumer::VoipLobby
-                    } else {
-                        CameraConsumer::Idle
-                    };
-                    VoipGlobalState::acquire_camera_for(cx, new_consumer);
 
                     if tab_id == id!(home_tab) {
                         cx.action(AppStateAction::FocusNone);

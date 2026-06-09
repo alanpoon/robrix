@@ -3,18 +3,6 @@ fn main() {
     // We must check the target env at runtime to avoid running this
     // when cross-compiling (e.g., building for Android on a Windows CI runner).
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-
-    // Android: the parallel Camera2 NDK capture used by the Robot tab
-    // (`src/gesture_control/acamera_capture.rs`) links against
-    // `libcamera2ndk` and `libmediandk`. Both ship as standard shared
-    // libraries in NDK 24+ but cargo-makepad's Android linker invocation
-    // doesn't pull them in automatically — emit explicit link directives
-    // here so the build picks them up on every Android target.
-    if target_os == "android" {
-        println!("cargo:rustc-link-lib=dylib=camera2ndk");
-        println!("cargo:rustc-link-lib=dylib=mediandk");
-    }
-
     if target_os == "windows" {
         #[cfg(windows)]
         {

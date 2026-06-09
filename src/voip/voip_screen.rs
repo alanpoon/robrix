@@ -995,16 +995,6 @@ impl Widget for VoipScreen {
                                 }
                             }
                         }
-                        VoipAction::CameraAcquired { consumer } => {
-                            // Some other consumer (e.g. the Robot tab) just
-                            // took exclusive control of the camera. If we are
-                            // currently showing the lobby preview, release it.
-                            if *consumer != super::CameraConsumer::VoipLobby && self.in_lobby && self.camera_active {
-                                log!("VoipScreen: releasing lobby camera for {:?}", consumer);
-                                CameraManager::stop_lobby_camera(&self.view, cx);
-                                self.camera_active = false;
-                            }
-                        }
                         _ => {}
                     }
                 }

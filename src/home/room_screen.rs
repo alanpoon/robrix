@@ -2533,44 +2533,9 @@ script_mod! {
                     }
                     text: ""
                 }
-
-                avatar_row := mod.widgets.AvatarRow {}
             }
-        }
-    }
 
-    // The summary row shown for a collapsed group of adjacent small state events.
-    mod.widgets.SmallStateEventsSummary = View {
-        width: Fill,
-        height: Fit,
-        flow: Right,
-        margin: Inset{ top: 4.0, bottom: 4.0}
-        padding: Inset{ left: 50.0, top: 1.0, bottom: 1.0, right: 10.0 }
-        spacing: 7.0
-        cursor: MouseCursor.Default
-
-        summary_label := Label {
-            width: Fit,
-            height: Fit
-            flow: Right
-            margin: Inset{top: 1.5}
-            draw_text +: {
-                text_style: SMALL_STATE_TEXT_STYLE {}
-                color: (SMALL_STATE_TEXT_COLOR)
-            }
-            text: ""
-        }
-
-        spacer := View {
-            width: Fill
-            height: Fit
-        }
-
-        state_group_toggle_button := mod.widgets.SmallStateGroupToggleButton {
-            width: Fit
-            height: Fit
-            margin: Inset{ left: 2.0, top: 1.0 }
-            text: ""
+            avatar_row := mod.widgets.AvatarRow {}
         }
     }
 

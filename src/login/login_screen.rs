@@ -1133,7 +1133,6 @@ impl WidgetMatchEvent for LoginScreen {
             || password_input.returned(actions).is_some()
             || homeserver_input.returned(actions).is_some()
         {
-            log!("login button clicked");
             let user_id = user_id_input.text().trim().to_owned();
             let password = password_input.text();
             let homeserver = homeserver_input.text().trim().to_owned();

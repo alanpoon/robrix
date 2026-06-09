@@ -368,22 +368,6 @@ script_mod! {
                             space_lobby_screen := mod.widgets.SpaceLobbyScreen {}
                         }
                     }
-
-                    // Mobile-only entry point for the gesture-control Robot tab.
-                    // Desktop has a permanent DockTab for this (see main_desktop_ui.rs);
-                    // mobile users get here by tapping the "Robot" row in the rooms list.
-                    robot_view := mod.widgets.RobrixContentView {
-                        header +: {
-                            content +: {
-                                title_container +: {
-                                    title +: { text: "Chenlong Robot" }
-                                }
-                            }
-                        }
-                        body +: {
-                            robot_screen := mod.widgets.RobotScreen {}
-                        }
-                    }
                 }
             }
         }

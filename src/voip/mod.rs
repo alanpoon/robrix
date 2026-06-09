@@ -143,27 +143,8 @@ pub enum VoipAction {
     PipHangup { room_id: OwnedRoomId },
     /// Return to the VoIP tab from clicking on PiP
     ReturnToVoipTab { room_id: OwnedRoomId },
-    /// Broadcast that some consumer is acquiring the local camera. Other
-    /// consumers (e.g. the VoIP lobby preview, the Robot tab's webcam view)
-    /// listen for this and release their video feed if the requesting consumer
-    /// is not them. Only one consumer can hold `video_input(0, …)` at a time.
-    CameraAcquired { consumer: CameraConsumer },
     #[default]
     None,
-}
-
-/// Identifies which Robrix screen currently wants exclusive access to the
-/// shared `video_input(0,…)` callback. See `VoipAction::CameraAcquired`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CameraConsumer {
-    /// No camera consumer is active — fired when the user switches to a tab
-    /// that doesn't use the camera (Home, room timelines, etc.). All previous
-    /// consumers should release on observing this.
-    Idle,
-    /// A VoIP lobby tab's pre-call camera preview.
-    VoipLobby,
-    /// The Robot tab's webcam view (hand-gesture pipeline).
-    Robot,
 }
 
 /// Global VoIP state stored in Makepad's Cx context.
@@ -380,19 +361,5 @@ impl VoipGlobalState {
             return state.active_call.clone();
         }
         None
-    }
-
-    /// Broadcast that `consumer` is taking exclusive control of the camera.
-    /// Other consumers listening on Makepad's action bus should release their
-    /// `video_input(0,…)` callback / `Video` widget when they observe a
-    /// `CameraAcquired { consumer }` action whose value is not their own
-    /// consumer ID.
-    ///
-    /// This is the spec-mandated camera-coordination hook between the VoIP
-    /// lobby and the Robot tab (see `task-gesture-robot-control.spec.md`,
-    /// "Camera coordination" decision).
-    pub fn acquire_camera_for(cx: &mut Cx, consumer: CameraConsumer) {
-        log!("VoipGlobalState: camera acquired by {:?}", consumer);
-        cx.action(VoipAction::CameraAcquired { consumer });
     }
 }

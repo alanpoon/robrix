@@ -13,10 +13,6 @@ pub struct AppPreferences {
     pub thumbnail_max_height: ThumbnailMaxHeight,
     #[serde(default)]
     pub ui_zoom: UiZoom,
-    /// IP (or `ip:port`) of the robotic-arm-car endpoint used by the Robot
-    /// tab's gesture controller. `None` until the user enters a value.
-    #[serde(default)]
-    pub robot_control_ip: Option<String>,
 }
 
 impl Default for AppPreferences {
@@ -26,7 +22,6 @@ impl Default for AppPreferences {
             send_on_enter: true,
             thumbnail_max_height: ThumbnailMaxHeight::default(),
             ui_zoom: UiZoom::default(),
-            robot_control_ip: None,
         }
     }
 }
@@ -93,19 +88,11 @@ impl AppPreferences {
         cx.action(AppPreferencesAction::UiZoomChanged(self.ui_zoom));
     }
 
-    pub fn on_robot_control_ip_changed(&self, cx: &mut Cx) {
-        cx.global::<AppPreferencesGlobal>().0.robot_control_ip = self.robot_control_ip.clone();
-        cx.action(AppPreferencesAction::RobotControlIpChanged(
-            self.robot_control_ip.clone(),
-        ));
-    }
-
     pub fn broadcast_all(&self, cx: &mut Cx) {
         self.on_view_mode_changed(cx);
         self.on_send_on_enter_changed(cx);
         self.on_thumbnail_max_height_changed(cx);
         self.on_ui_zoom_changed(cx);
-        self.on_robot_control_ip_changed(cx);
     }
 }
 
@@ -227,7 +214,6 @@ pub enum AppPreferencesAction {
     ViewModeChanged(ViewModeOverride),
     SendOnEnterChanged(bool),
     UiZoomChanged(UiZoom),
-    RobotControlIpChanged(Option<String>),
 }
 
 #[derive(Default, Clone)]
