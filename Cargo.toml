@@ -213,9 +213,6 @@ ruma = { git = "https://github.com/project-robius/ruma.git", branch = "tsp" }
 ## `robrix-android-patches` branch back to `alanpoon/makepad` (or fast-
 ## forward `video_player_fix_android` to it) and the `[patch]` block below
 ## becomes redundant.
-[patch."https://github.com/alanpoon/makepad"]
-makepad-widgets = { path = "../makepad-patched/widgets" }
-makepad-code-editor = { path = "../makepad-patched/code_editor" }
 
 [build-dependencies]
 toml = "1"
