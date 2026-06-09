@@ -288,20 +288,15 @@ impl MainDesktopUI {
                 }
             } else {
                 // If there is no room to focus, notify app to reset the selected room in the app state
-                log!("No more rooms to focus, selecting home_tab");
                 cx.action(AppStateAction::FocusNone);
                 dock.select_tab(cx, id!(home_tab));
                 self.most_recently_selected_room = None;
             }
-        } else {
-            log!("Room not found in open_rooms for tab_id: {:?}", tab_id);
         }
 
-        log!("Calling dock.close_tab for tab_id: {:?}", tab_id);
         dock.close_tab(cx, tab_id);
         self.tab_to_close = None;
         self.open_rooms.remove(&tab_id);
-        log!("Tab closed, open_rooms now has {} tabs", self.open_rooms.len());
     }
 
     /// Closes every open tab belonging to the given room, including thread tabs.

@@ -373,6 +373,13 @@ script_mod! {
                     // Desktop has a permanent DockTab for this (see main_desktop_ui.rs);
                     // mobile users get here by tapping the "Robot" row in the rooms list.
                     robot_view := mod.widgets.RobrixContentView {
+                        header +: {
+                            content +: {
+                                title_container +: {
+                                    title +: { text: "Chenlong Robot" }
+                                }
+                            }
+                        }
                         body +: {
                             robot_screen := mod.widgets.RobotScreen {}
                         }

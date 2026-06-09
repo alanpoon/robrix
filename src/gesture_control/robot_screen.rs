@@ -113,7 +113,7 @@ script_mod! {
                         }
                     }
                     robot_ip_input := RobrixTextInput {
-                        width: 200, height: Fit
+                        width: 150, height: Fit
                         empty_text: "192.168.4.1"
                         padding: Inset{top: 6, bottom: 6, left: 10, right: 10}
                     }
@@ -151,26 +151,33 @@ script_mod! {
                         visible: false
                     }
 
+                    // Floats above the preview in the top-right of the
+                    // webcam tile. The outer layer is Fill so it overlays
+                    // the whole tile; its inner pill is `Fit`-sized and
+                    // anchored top-right by `Align{x: 1.0, y: 0.0}`. A
+                    // small `padding` on the layer keeps the pill from
+                    // touching the tile's edge.
                     gesture_overlay_layer := View {
                         width: Fill, height: Fill
-                        align: Align{x: 0.5, y: 0.5}
+                        align: Align{x: 1.0, y: 0.0}
+                        padding: Inset{top: 4, bottom: 0, left: 0, right: 4}
 
                         gesture_overlay_pill := RoundedView {
                             visible: false
                             width: Fit, height: Fit
-                            flow: Down
+                            flow: Right
                             align: Align{x: 0.5, y: 0.5}
                             show_bg: true
-                            draw_bg +: { color: #x000000DD, border_radius: 14.0 }
-                            padding: Inset{top: 8, bottom: 8, left: 14, right: 14}
-                            spacing: 2
+                            draw_bg +: { color: #x000000DD, border_radius: 8.0 }
+                            padding: Inset{top: 3, bottom: 3, left: 6, right: 6}
+                            spacing: 4
 
                             gesture_overlay_icon := Label {
                                 text: "—"
                                 align: Align{x: 0.5, y: 0.5}
                                 draw_text +: {
                                     color: #xFFFFFF
-                                    text_style: theme.font_bold { font_size: 32.0 }
+                                    text_style: theme.font_bold { font_size: 12.0 }
                                 }
                             }
                             gesture_overlay_label := Label {
@@ -178,7 +185,7 @@ script_mod! {
                                 align: Align{x: 0.5, y: 0.5}
                                 draw_text +: {
                                     color: #xFFFFFF
-                                    text_style: theme.font_bold { font_size: 12.0 }
+                                    text_style: theme.font_bold { font_size: 9.0 }
                                 }
                             }
                         }
@@ -229,7 +236,7 @@ script_mod! {
             btn_camera := Button {
                 text: "Open camera"
                 width: Fill, height: 36
-                draw_text +: { color: #x000000 }
+                draw_text +: { color: #x000000, color_hover: #x000000, color_down: #x000000 }
             }
 
             inference_caption := Label {
@@ -269,7 +276,7 @@ script_mod! {
                         text: "▲"
                         width: 56, height: 36
                         draw_bg +: { color: #xCCCCCC }
-                        draw_text +: { color: #x000000 }
+                        draw_text +: { color: #x000000, color_hover: #x000000, color_down: #x000000 }
                     }
                 }
                 cross_row_mid := View {
@@ -279,19 +286,19 @@ script_mod! {
                         text: "◀"
                         width: 56, height: 36
                         draw_bg +: { color: #xCCCCCC }
-                        draw_text +: { color: #x000000 }
+                        draw_text +: { color: #x000000, color_hover: #x000000, color_down: #x000000 }
                     }
                     btn_stop := Button {
                         text: "⏹"
                         width: 56, height: 36
                         draw_bg +: { color: #xCCCCCC }
-                        draw_text +: { color: #x000000 }
+                        draw_text +: { color: #x000000, color_hover: #x000000, color_down: #x000000 }
                     }
                     btn_right := Button {
                         text: "▶"
                         width: 56, height: 36
                         draw_bg +: { color: #xCCCCCC }
-                        draw_text +: { color: #x000000 }
+                        draw_text +: { color: #x000000, color_hover: #x000000, color_down: #x000000 }
                     }
                 }
                 cross_row_down := View {
@@ -300,7 +307,7 @@ script_mod! {
                         text: "▼"
                         width: 56, height: 36
                         draw_bg +: { color: #xCCCCCC }
-                        draw_text +: { color: #x000000 }
+                        draw_text +: { color: #x000000, color_hover: #x000000, color_down: #x000000 }
                     }
                 }
             }
@@ -310,13 +317,13 @@ script_mod! {
                     text: "✊ Catch"
                     width: Fill, height: 32
                     draw_bg +: { color: #xCCCCCC }
-                    draw_text +: { color: #x000000 }
+                    draw_text +: { color: #x000000, color_hover: #x000000, color_down: #x000000 }
                 }
                 btn_drop := Button {
                     text: "🖐 Release"
                     width: Fill, height: 32
                     draw_bg +: { color: #xCCCCCC }
-                    draw_text +: { color: #x000000 }
+                    draw_text +: { color: #x000000, color_hover: #x000000, color_down: #x000000 }
                 }
             }
 
