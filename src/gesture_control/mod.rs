@@ -23,6 +23,8 @@ pub mod robot_screen;
 pub mod camera_capture;
 #[cfg(target_os = "macos")]
 pub mod avf_capture;
+#[cfg(target_os = "android")]
+pub mod acamera_capture;
 pub mod frame_analyzer;
 
 /// The six discrete gesture actions the classifier can emit, plus `None`

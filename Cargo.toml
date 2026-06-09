@@ -195,6 +195,28 @@ askar-storage = { git = "https://github.com/openwallet-foundation/askar.git" }
 [patch."https://github.com/ruma/ruma"]
 ruma = { git = "https://github.com/project-robius/ruma.git", branch = "tsp" }
 
+
+## Redirect the makepad git dependencies (which point at the
+## `alanpoon/makepad` fork on the `video_player_fix_android` branch) to a
+## local clone in `../makepad-patched`. That clone is checked out to the
+## `robrix-android-patches` branch — its base is `video_player_fix_android`
+## with one additional commit applied on top:
+##   * `android_media::camera_frame_input_box` now calls
+##     `AndroidCameraAccess::reconcile_streams()` after storing the callback,
+##     so a `cx.camera_frame_input(0, …)` registration triggers a session
+##     rebuild and the `ImageReader` output target actually gets attached.
+##     Without this, the Robot tab's inference pipeline never receives
+##     frames on Android (logcat 2026-06-09 10:53:56 "pipeline stuck —
+##     capture=true, first_frame_seen=false").
+##
+## To take this patch upstream into the fork, push the
+## `robrix-android-patches` branch back to `alanpoon/makepad` (or fast-
+## forward `video_player_fix_android` to it) and the `[patch]` block below
+## becomes redundant.
+[patch."https://github.com/alanpoon/makepad"]
+makepad-widgets = { path = "../makepad-patched/widgets" }
+makepad-code-editor = { path = "../makepad-patched/code_editor" }
+
 [build-dependencies]
 toml = "1"
 

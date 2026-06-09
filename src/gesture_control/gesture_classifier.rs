@@ -48,28 +48,32 @@ const EXTENSION_RATIO: f32 = 1.6;
 /// clean pointing direction (avoids diagonal jitter).
 const AXIS_DOMINANCE_RATIO: f32 = 1.3;
 
-/// Handedness score *below* which the MediaPipe hand-landmark model's
-/// `Identity_2` output is interpreted as the user's right hand. Empirically
-/// verified against the OpenCV Zoo port plus this codebase's camera path:
-/// the model emits a value near 0 for the user's right hand and near 1 for
-/// the left, so the right-hand branch uses `handedness < threshold`.
-const HANDEDNESS_RIGHT_THRESHOLD: f32 = 0.5;
+// `HANDEDNESS_RIGHT_THRESHOLD` was previously used to map the two-finger
+// peace sign to Left/Right via the model's `Identity_2` (anatomical-hand)
+// output. Left/Right are now derived from the index-tip vector instead, so
+// the threshold is no longer needed.
 
 /// Classify a 21-landmark hand configuration into a discrete [`GestureAction`].
 ///
 /// Gesture map:
 /// - open palm (all 5 fingers extended) → [`GestureAction::Drop`]
-/// - closed fist (no fingers extended) → [`GestureAction::Catch`]
-/// - index only, pointing up/down → [`GestureAction::Forward`] /
-///   [`GestureAction::Back`]
+/// - closed fist (ALL five fingers — index/middle/ring/pinky AND thumb —
+///   closed) → [`GestureAction::Catch`] (the "grab" gesture)
+/// - index only, pointing up → [`GestureAction::Forward`]
+/// - index only, pointing down → [`GestureAction::Back`]
 /// - thumbs down (thumb extended downward, fingers curled) →
 ///   [`GestureAction::Back`] (loose diagonal allowance — alternate path)
-/// - index + middle extended, ring + pinky curled → [`GestureAction::Right`]
-///   if `handedness` reads as the right hand, [`GestureAction::Left`] otherwise
 /// - anything else → `None`
 ///
+/// Left / Right are NOT emitted by this function — they are derived from
+/// hand-motion direction in `inference_worker::MotionTracker` (the user's
+/// hand sweeping left/right triggers them), so any static pose maps only
+/// to the four other gestures.
+///
 /// `handedness` is the MediaPipe hand-landmark model's `Identity_2` output —
-/// a value near 0 or 1 indicating which anatomical hand the model identified.
+/// retained on the signature for backward compatibility with the caller in
+/// `inference_worker`, but no longer consulted now that Left/Right are
+/// motion-based rather than pose-based.
 ///
 /// Landmark layout (MediaPipe canonical):
 /// - `0`       wrist
@@ -78,7 +82,7 @@ const HANDEDNESS_RIGHT_THRESHOLD: f32 = 0.5;
 /// - `9‑12`    middle (tip = 12, mcp = 9)
 /// - `13‑16`   ring   (tip = 16, mcp = 13)
 /// - `17‑20`   pinky  (tip = 20, mcp = 17)
-pub fn classify(lm: &[Vec2; 21], handedness: f32) -> Option<GestureAction> {
+pub fn classify(lm: &[Vec2; 21], _handedness: f32) -> Option<GestureAction> {
     let wrist = lm[0];
     let palm_size = (lm[5] - lm[17]).length();
     if palm_size < f32::EPSILON {
@@ -112,34 +116,24 @@ pub fn classify(lm: &[Vec2; 21], handedness: f32) -> Option<GestureAction> {
             return Some(GestureAction::Back);
         }
     }
-    // Index-only pointing up/down → Forward / Back. Horizontal/diagonal index
-    // pointing is intentionally unmapped — Left/Right are the two-finger
-    // gestures below.
+    // Index-only pointing up/down → Forward / Back. Horizontal pointing is
+    // intentionally unmapped — Left/Right are now driven by horizontal
+    // hand motion in `inference_worker::MotionTracker`, not by a static
+    // finger orientation. Diagonal pointing is unmapped to avoid noisy
+    // mid-gesture firings.
     if idx_ext && !mid_ext && !ring_ext && !pinky_ext {
         let v = (lm[8] - wrist) / palm_size;
         if v.y.abs() > v.x.abs() * AXIS_DOMINANCE_RATIO {
             return Some(if v.y < 0.0 { GestureAction::Forward } else { GestureAction::Back });
         }
     }
-    // Closed fist: no fingers extended.
-    if !idx_ext && !mid_ext && !ring_ext && !pinky_ext {
+    // Closed fist ("grab"): ALL five fingers closed, including the thumb.
+    // This is stricter than before — a thumbs-up/down stance (thumb extended
+    // but fingers curled) no longer triggers a grab; only a fully-closed
+    // fist does. The thumbs-down branch above still fires for Back since it
+    // runs first.
+    if !idx_ext && !mid_ext && !ring_ext && !pinky_ext && !thumb_ext {
         return Some(GestureAction::Catch);
-    }
-    // Two-finger peace sign (index + middle extended, ring + pinky curled,
-    // thumb don't-care). Direction is encoded by the model's handedness output
-    // rather than image-space position, so the user can hold the hand wherever
-    // is comfortable in frame. We map the user's left hand → `Left`, right
-    // hand → `Right` — i.e. the gesture follows the anatomical hand making
-    // it. After the selfie mirror in `submit_frame_for_inference`, the
-    // OpenCV Zoo model emits `Identity_2 ≈ 1` for the user's right hand and
-    // `≈ 0` for the left, so the polarity here is inverted versus the
-    // constant's pre-mirror documentation.
-    if idx_ext && mid_ext && !ring_ext && !pinky_ext {
-        return Some(if handedness < HANDEDNESS_RIGHT_THRESHOLD {
-            GestureAction::Left
-        } else {
-            GestureAction::Right
-        });
     }
     None
 }
@@ -229,12 +223,12 @@ mod tests {
     }
 
     #[test]
-    fn thumb_up_yields_catch() {
-        // Thumb extended upward, all four fingers curled. Thumbs-up is no
-        // longer mapped to Forward — it falls through to the closed-fist
-        // branch and registers as Catch. (Forward is now index-pointing-up.)
+    fn thumb_up_no_longer_yields_catch() {
+        // Thumb extended upward, fingers curled. The Catch gesture now
+        // requires ALL five fingers closed (including the thumb), so a
+        // thumbs-up no longer falls through to Catch — it's unmapped.
         let lm = fixture([false, false, false, false], true, Vec2::new(0.0, 0.0), Vec2::new(0.0, -0.6));
-        assert_eq!(classify(&lm, 0.5), Some(GestureAction::Catch));
+        assert_eq!(classify(&lm, 0.5), None);
     }
 
     #[test]
@@ -253,19 +247,19 @@ mod tests {
     }
 
     #[test]
-    fn thumb_diagonal_up_yields_catch() {
-        // Diagonal up is intentionally NOT accepted as Forward — thumbs-up
-        // keeps the stricter dominance ratio, so this falls through to Catch.
+    fn thumb_diagonal_up_no_longer_yields_catch() {
+        // Diagonal up: thumb extended but fingers curled → no longer Catch
+        // (thumb is extended, so the strict-all-five-closed check fails).
         let lm = fixture([false, false, false, false], true, Vec2::new(0.0, 0.0), Vec2::new(0.4, -0.5));
-        assert_eq!(classify(&lm, 0.5), Some(GestureAction::Catch));
+        assert_eq!(classify(&lm, 0.5), None);
     }
 
     #[test]
-    fn thumb_sideways_yields_catch() {
-        // Thumb extended horizontally falls through to the closed-fist branch
-        // rather than being labeled Forward/Back.
+    fn thumb_sideways_no_longer_yields_catch() {
+        // Same rationale as `thumb_diagonal_up`: any extended thumb breaks
+        // the all-five-closed precondition.
         let lm = fixture([false, false, false, false], true, Vec2::new(0.0, 0.0), Vec2::new(0.6, 0.0));
-        assert_eq!(classify(&lm, 0.5), Some(GestureAction::Catch));
+        assert_eq!(classify(&lm, 0.5), None);
     }
 
     #[test]
@@ -285,26 +279,33 @@ mod tests {
 
     #[test]
     fn index_pointing_horizontal_is_unmapped() {
-        // Horizontal index pointing is no longer mapped — Left/Right are the
-        // two-finger gestures.
-        let horiz = fixture([true, false, false, false], false, Vec2::new(0.6, 0.0), Vec2::new(0.0, 0.0));
-        assert_eq!(classify(&horiz, 0.5), None);
+        // Horizontal index pointing is intentionally unmapped — Left/Right
+        // are derived from hand motion in `inference_worker::MotionTracker`,
+        // not from static finger orientation.
+        let right = fixture([true, false, false, false], false, Vec2::new(0.6, 0.0), Vec2::new(0.0, 0.0));
+        assert_eq!(classify(&right, 0.5), None);
+        let left = fixture([true, false, false, false], false, Vec2::new(-0.6, 0.0), Vec2::new(0.0, 0.0));
+        assert_eq!(classify(&left, 0.5), None);
     }
 
     #[test]
-    fn two_fingers_low_handedness_yields_left() {
-        // Index + middle extended, ring + pinky curled. Handedness <
-        // threshold now maps to `Left` — we mirror selfie frames before
-        // inference, which flips the OpenCV Zoo port's `Identity_2`
-        // polarity (the user's right hand now reads ≈ 1, left hand ≈ 0).
-        let lm = fixture([true, true, false, false], false, Vec2::new(0.0, -0.6), Vec2::new(0.0, 0.0));
-        assert_eq!(classify(&lm, 0.1), Some(GestureAction::Left));
+    fn index_pointing_diagonal_is_unmapped() {
+        // Diagonal pointing where the y axis does not dominate the x axis
+        // by AXIS_DOMINANCE_RATIO is unmapped to avoid noisy mid-gesture
+        // firings during transitions between cardinal directions.
+        let lm = fixture([true, false, false, false], false, Vec2::new(0.5, -0.5), Vec2::new(0.0, 0.0));
+        assert_eq!(classify(&lm, 0.5), None);
     }
 
     #[test]
-    fn two_fingers_high_handedness_yields_right() {
+    fn two_finger_peace_sign_is_unmapped() {
+        // The two-finger peace sign no longer maps to Left/Right — those
+        // gestures are now driven by single-index pointing. The peace sign
+        // is intentionally unmapped so a transient mid-gesture state
+        // doesn't accidentally fire something else.
         let lm = fixture([true, true, false, false], false, Vec2::new(0.0, -0.6), Vec2::new(0.0, 0.0));
-        assert_eq!(classify(&lm, 0.9), Some(GestureAction::Right));
+        assert_eq!(classify(&lm, 0.1), None);
+        assert_eq!(classify(&lm, 0.9), None);
     }
 
     #[test]

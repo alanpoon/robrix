@@ -15,23 +15,38 @@
 use std::time::Instant;
 
 use makepad_widgets::*;
-use makepad_widgets::video::VideoCameraPreviewMode;
-
-use crossbeam_channel::Receiver;
-
+#[cfg(target_os = "android")]
+use crate::shared::webrtc_video::WebRtcVideoWidgetExt;
 use crate::gesture_control::{
     GestureAction,
-    inference_worker::InferenceWorker,
+    inference_worker::{InferenceWorker, InferenceWorkerAction},
     model_downloader,
     robot_http::{HttpOutcome, HttpResult, RobotHttpSender, validate_ip},
 };
 
-// Platform-conditional inference frame source. On macOS we open a parallel
-// `AVCaptureSession` (BGRA-aware) because Makepad's `camera_frame_input`
-// dispatcher drops BGRA. Everywhere else we ride Makepad's path.
+/// Request-id tag for the hand-model ONNX download. Round-tripped through
+/// `cx.http_request` / `Event::NetworkResponses` to disambiguate from the
+/// robot-control requests handled by `RobotHttpSender`.
+pub const MODEL_DOWNLOAD_REQUEST_ID: LiveId = live_id!(robot_model_download);
+
+// Platform-conditional inference frame source.
+//
+// On macOS we open a parallel `AVCaptureSession` (BGRA-aware) because
+// Makepad's `camera_frame_input` dispatcher drops BGRA.
+//
+// On Android we open Camera2 directly via the NDK (`AcameraCapture`).
+// Mirrors the macOS pattern — completely independent of Makepad's Video
+// widget and its `cx.camera_frame_input(...)` / `register_preview` path,
+// which thrashed the Camera2 session on session rebuilds and produced
+// `device error 4` on the user's device (logcat 2026-06-09 13:50:06).
+//
+// Elsewhere (desktop Linux / Windows for now) we still ride Makepad's
+// `camera_frame_input` callback via `CameraCapture`.
 #[cfg(target_os = "macos")]
 type InferenceCapture = crate::gesture_control::avf_capture::AvfCapture;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "android")]
+type InferenceCapture = crate::gesture_control::acamera_capture::AcameraCapture;
+#[cfg(not(any(target_os = "macos", target_os = "android")))]
 type InferenceCapture = crate::gesture_control::camera_capture::CameraCapture;
 use crate::settings::app_preferences::AppPreferencesGlobal;
 use crate::shared::webrtc_video::WebRtcVideoFrame;
@@ -118,6 +133,20 @@ script_mod! {
                     draw_bg +: { color: #x1a1a1a, border_radius: 8.0 }
 
                     preview_video := Video {
+                        width: Fill, height: Fill
+                        visible: false
+                    }
+
+                    // Display surface for the Android path. Makepad's `Video`
+                    // widget owns its own Camera2 session, which collides
+                    // with `AcameraCapture`'s parallel session (Camera2
+                    // allows only one session per device). On Android the
+                    // Video widget above stays hidden and inference frames
+                    // from AcameraCapture are pushed into this widget via
+                    // `WebRtcVideoRef::set_frame` so the user still sees the
+                    // live preview. Stays hidden on every other platform —
+                    // those keep using `preview_video`.
+                    preview_video_push := WebRtcVideo {
                         width: Fill, height: Fill
                         visible: false
                     }
@@ -378,17 +407,20 @@ pub struct RobotScreen {
     /// Hand-landmark ONNX inference worker. `Some` once the model has been
     /// successfully loaded; `None` if load failed or hasn't been attempted.
     #[rust] inference: Option<InferenceWorker>,
+    /// Worker whose `HandModel::load` is still running on a background
+    /// `spawn_blocking` task. Promoted into `self.inference` when an
+    /// [`InferenceWorkerAction::Ready`] arrives, or dropped on
+    /// [`InferenceWorkerAction::LoadFailed`]. Keeping it here while
+    /// pending also keeps the `frame_tx` / `result_rx` channels open,
+    /// which the background task needs to enter `worker_loop`.
+    #[rust] inference_pending: Option<InferenceWorker>,
     /// Set once we've tried to load the model and failed — keeps us from
     /// re-attempting load on every click. Cleared automatically when a
     /// pending model download succeeds (see `pump_inference_results`).
     #[rust] inference_load_failed: bool,
-    /// True once we've kicked off the async model download. Stays true
-    /// even on failure so we don't spam the network with retries.
+    /// True once we've kicked off the model download via `cx.http_request`.
+    /// Stays true even on failure so we don't spam the network with retries.
     #[rust] model_download_started: bool,
-    /// Result channel from the background `ensure_downloaded()` task.
-    /// `Some` only while a download is in flight; cleared once the result
-    /// has been consumed in `pump_inference_results`.
-    #[rust] model_download_rx: Option<Receiver<Result<(), String>>>,
     /// One-shot diagnostic: log the dimensions of the first camera frame
     /// that reaches inference so we can verify `cx.camera_frame_input`
     /// is actually firing on Android.
@@ -407,6 +439,10 @@ pub struct RobotScreen {
     /// movement is currently active. Manual control buttons bypass this —
     /// they already use the press/release pattern for stop.
     #[rust] auto_stop_at: Option<Instant>,
+    /// Last time we logged a "still waiting" diagnostic line while the
+    /// camera was running but no frame had reached `submit_frame_for_inference`
+    /// yet. Throttled so we don't spam logcat at 60 Hz.
+    #[rust] last_camera_waiting_log_at: Option<Instant>,
 }
 
 const MAX_RECENT_LINES: usize = 8;
@@ -454,6 +490,7 @@ impl Widget for RobotScreen {
             self.refresh_auto_stop(cx);
             self.pump_camera_frames(cx);
             self.pump_inference_results(cx);
+            self.log_pipeline_state_if_stuck();
             cx.new_next_frame();
         }
 
@@ -469,6 +506,7 @@ impl Widget for RobotScreen {
                 if let Some(result) = result {
                     self.apply_http_result(cx, result);
                 }
+                self.apply_model_download_response(cx, response);
             }
         }
 
@@ -516,6 +554,34 @@ impl RobotScreen {
                     }
                 } else if self.camera_held {
                     self.release_camera(cx);
+                }
+            }
+            // The background `InferenceWorker::spawn` task signals via these
+            // actions once the model has actually finished loading on the
+            // tokio blocking pool. Only then do we promote the pending
+            // worker into the active slot — that way `self.inference` being
+            // `Some` means "frames will actually be processed".
+            if let Some(a) = action.downcast_ref::<InferenceWorkerAction>() {
+                match a {
+                    InferenceWorkerAction::Ready => {
+                        if let Some(worker) = self.inference_pending.take() {
+                            log!("RobotScreen: inference worker ready; activating");
+                            self.inference = Some(worker);
+                            self.view
+                                .label(cx, ids!(inference_value))
+                                .set_text(cx, "(no hand detected)");
+                            self.view.redraw(cx);
+                        }
+                    }
+                    InferenceWorkerAction::LoadFailed(msg) => {
+                        log!("RobotScreen: hand-model load failed: {msg}");
+                        self.inference_pending = None;
+                        self.inference_load_failed = true;
+                        self.view
+                            .label(cx, ids!(inference_value))
+                            .set_text(cx, "Model load failed");
+                        self.view.redraw(cx);
+                    }
                 }
             }
         }
@@ -785,12 +851,17 @@ impl RobotScreen {
     /// surfaces as a one-time log line rather than blocking tab open.
     ///
     /// We horizontally flip the RGBA buffer before submitting because
-    /// `pick_camera_choice` now prefers the front (selfie) camera, which
-    /// delivers a mirrored image. The hand-model and `gesture_classifier`'s
-    /// handedness threshold were calibrated against the un-mirrored back-
-    /// camera orientation, so without this flip a user's right hand reads
-    /// as left and the two-finger Left/Right gestures come out swapped.
-    fn submit_frame_for_inference(&mut self, mut frame: WebRtcVideoFrame) {
+    /// `pick_camera_choice` prefers the front (selfie) camera, which
+    /// delivers a mirrored image. The hand-model and `gesture_classifier`
+    /// were calibrated against the un-mirrored back-camera orientation, so
+    /// without this flip a user's right hand reads as left.
+    ///
+    /// On Android the flip is applied upstream in `pump_camera_frames`
+    /// (so the display and inference frames stay spatially identical —
+    /// the user sees the same orientation the classifier sees), so we
+    /// skip the redundant flip here. Other platforms still need it.
+    fn submit_frame_for_inference(&mut self, #[cfg_attr(target_os = "android", allow(unused_mut))] mut frame: WebRtcVideoFrame) {
+        #[cfg(not(target_os = "android"))]
         mirror_rgba_horizontal_in_place(&mut frame.data, frame.width, frame.height);
         if !self.logged_first_camera_frame {
             log!(
@@ -799,7 +870,10 @@ impl RobotScreen {
             );
             self.logged_first_camera_frame = true;
         }
-        if self.inference.is_none() && !self.inference_load_failed {
+        if self.inference.is_none()
+            && self.inference_pending.is_none()
+            && !self.inference_load_failed
+        {
             // Don't even try to load if the ONNX file isn't on disk —
             // `ensure_model_download_started` (driven from the per-frame
             // pump) will fetch it asynchronously and clear
@@ -807,23 +881,34 @@ impl RobotScreen {
             if !model_downloader::landmark_model_present_and_valid() {
                 return;
             }
-            match InferenceWorker::spawn() {
-                Ok(w) => self.inference = Some(w),
-                Err(e) => {
-                    log!("RobotScreen: hand-model load failed: {e:#}");
-                    self.inference_load_failed = true;
-                }
-            }
+            log!("RobotScreen: scheduling inference worker (waiting for Ready)");
+            self.inference_pending = Some(InferenceWorker::spawn());
         }
+        // Only submit once the background worker has signalled Ready (which
+        // moves the pending value into `self.inference`). Frames received
+        // while the model is still loading are dropped — bounded(1) gives
+        // the worker the freshest frame anyway when it does come online.
         if let Some(worker) = self.inference.as_ref() {
             let _ = worker.submit(frame);
         }
     }
 
-    /// Kick off the async model download via Robrix's tokio runtime if we
-    /// haven't already. Result lands on `self.model_download_rx`, which is
-    /// drained on every NextFrame in `pump_inference_results`.
-    fn ensure_model_download_started(&mut self) {
+    /// Kick off the model download via Makepad's `cx.http_request` if we
+    /// haven't already. The response lands on `Event::NetworkResponses`
+    /// (see `handle_event`), which calls `apply_model_download_response`
+    /// to verify the SHA, write the file, and clear `inference_load_failed`
+    /// so the very next frame retries `HandModel::load`.
+    ///
+    /// We use Makepad's HTTP path here (not reqwest) because on Android
+    /// `reqwest`'s `rustls-tls` feature unconditionally pulls in
+    /// `rustls-platform-verifier`, which panics on first use without a
+    /// JNI/Kotlin init shim (see logcat 2026-06-09 09:05:35 "Expect
+    /// rustls-platform-verifier to be initialized"). Makepad's HTTP
+    /// backend goes through the platform's native HTTPS stack
+    /// (`HttpURLConnection` on Android, NSURLSession on macOS) which
+    /// already handles certs and the GitHub-raw → media.githubusercontent
+    /// redirect chain.
+    fn ensure_model_download_started(&mut self, cx: &mut Cx) {
         if self.model_download_started {
             return;
         }
@@ -831,23 +916,72 @@ impl RobotScreen {
             return;
         }
         self.model_download_started = true;
-        let (tx, rx) = crossbeam_channel::bounded::<Result<(), String>>(1);
-        self.model_download_rx = Some(rx);
-        log!("RobotScreen: hand-model ONNX missing — starting async download");
-        let handle = match crate::sliding_sync::start_matrix_tokio() {
-            Ok(h) => h,
-            Err(e) => {
-                log!("RobotScreen: tokio runtime unavailable for model download: {e:#}");
-                let _ = tx.try_send(Err(format!("no tokio runtime: {e}")));
-                return;
+        let url = model_downloader::landmark_download_url();
+        log!("RobotScreen: requesting hand-model via cx.http_request from {url}");
+        let req = HttpRequest::new(url, HttpMethod::GET);
+        cx.http_request(MODEL_DOWNLOAD_REQUEST_ID, req);
+    }
+
+    /// Consume a `NetworkResponse` that belongs to the model-download
+    /// request, verify + install the body, and (on success) clear
+    /// `inference_load_failed` so the next frame retries the worker.
+    fn apply_model_download_response(&mut self, cx: &mut Cx, response: &NetworkResponse) {
+        match response {
+            NetworkResponse::HttpResponse { request_id, response: r }
+                if *request_id == MODEL_DOWNLOAD_REQUEST_ID =>
+            {
+                let status = r.status_code;
+                if !(200..300).contains(&status) {
+                    log!("RobotScreen: model download HTTP {status}");
+                    self.inference_load_failed = true;
+                    self.view
+                        .label(cx, ids!(inference_value))
+                        .set_text(cx, &format!("Model download HTTP {status}"));
+                    self.view.redraw(cx);
+                    return;
+                }
+                let Some(body) = r.body.as_ref() else {
+                    log!("RobotScreen: model download succeeded but body is empty");
+                    self.inference_load_failed = true;
+                    self.view
+                        .label(cx, ids!(inference_value))
+                        .set_text(cx, "Model download: empty body");
+                    self.view.redraw(cx);
+                    return;
+                };
+                match model_downloader::install_landmark_model(body) {
+                    Ok(()) => {
+                        log!(
+                            "RobotScreen: model installed ({} bytes); retrying inference",
+                            body.len()
+                        );
+                        self.inference_load_failed = false;
+                        self.view
+                            .label(cx, ids!(inference_value))
+                            .set_text(cx, "Model ready");
+                    }
+                    Err(e) => {
+                        log!("RobotScreen: model install failed: {e:#}");
+                        self.inference_load_failed = true;
+                        self.view
+                            .label(cx, ids!(inference_value))
+                            .set_text(cx, "Model install failed");
+                    }
+                }
+                self.view.redraw(cx);
             }
-        };
-        handle.spawn(async move {
-            let result = model_downloader::ensure_downloaded()
-                .await
-                .map_err(|e| format!("{e:#}"));
-            let _ = tx.try_send(result);
-        });
+            NetworkResponse::HttpError { request_id, error }
+                if *request_id == MODEL_DOWNLOAD_REQUEST_ID =>
+            {
+                log!("RobotScreen: model download transport error: {}", error.message);
+                self.inference_load_failed = true;
+                self.view
+                    .label(cx, ids!(inference_value))
+                    .set_text(cx, "Model download failed");
+                self.view.redraw(cx);
+            }
+            _ => {}
+        }
     }
 
     /// Drain any inference results delivered by the background worker, update
@@ -855,44 +989,22 @@ impl RobotScreen {
     /// async model-download channel so the inference can come online once
     /// the ONNX file lands on disk.
     fn pump_inference_results(&mut self, cx: &mut Cx) {
-        // First — if camera frames are flowing but inference can't load
-        // because the ONNX is missing, start the async download. Idempotent.
+        // If camera frames are flowing but inference can't load because the
+        // ONNX is missing, fire the download via cx.http_request. Idempotent
+        // — `ensure_model_download_started` self-guards on
+        // `self.model_download_started`. The response is consumed in
+        // `apply_model_download_response` (via Event::NetworkResponses).
         if self.camera_running
             && self.inference.is_none()
             && !self.inference_load_failed
             && !self.model_download_started
             && !model_downloader::landmark_model_present_and_valid()
         {
-            self.ensure_model_download_started();
+            self.ensure_model_download_started(cx);
             self.view
                 .label(cx, ids!(inference_value))
                 .set_text(cx, "Downloading model…");
             self.view.redraw(cx);
-        }
-
-        // Second — drain the download result if one is pending. Clearing
-        // `inference_load_failed` lets the next frame retry `HandModel::load`.
-        if let Some(rx) = self.model_download_rx.as_ref() {
-            if let Ok(result) = rx.try_recv() {
-                match result {
-                    Ok(()) => {
-                        log!("RobotScreen: model download succeeded; will retry inference");
-                        self.inference_load_failed = false;
-                        self.view
-                            .label(cx, ids!(inference_value))
-                            .set_text(cx, "Model ready");
-                    }
-                    Err(e) => {
-                        log!("RobotScreen: model download failed: {e}");
-                        self.inference_load_failed = true;
-                        self.view
-                            .label(cx, ids!(inference_value))
-                            .set_text(cx, "Model download failed");
-                    }
-                }
-                self.model_download_rx = None;
-                self.view.redraw(cx);
-            }
         }
 
         let results: Vec<_> = {
@@ -948,6 +1060,33 @@ impl RobotScreen {
         }
     }
 
+    /// Periodic diagnostic — while the user has the camera open but
+    /// inference hasn't kicked off yet, log the exact state of every gate
+    /// once every two seconds so we can see from logcat where the pipeline
+    /// is stuck without having to add ad-hoc logs.
+    fn log_pipeline_state_if_stuck(&mut self) {
+        if !self.camera_running || self.inference.is_some() {
+            return;
+        }
+        let now = Instant::now();
+        let should_log = self
+            .last_camera_waiting_log_at
+            .map(|t| now.duration_since(t) >= std::time::Duration::from_secs(2))
+            .unwrap_or(true);
+        if !should_log {
+            return;
+        }
+        self.last_camera_waiting_log_at = Some(now);
+        log!(
+            "RobotScreen: pipeline stuck — capture={}, first_frame_seen={}, model_present={}, model_download_started={}, inference_load_failed={}",
+            self.capture.is_some(),
+            self.logged_first_camera_frame,
+            model_downloader::landmark_model_present_and_valid(),
+            self.model_download_started,
+            self.inference_load_failed,
+        );
+    }
+
     /// Fire the auto-stop if its timer has elapsed. Called on every NextFrame.
     fn refresh_auto_stop(&mut self, cx: &mut Cx) {
         let Some(deadline) = self.auto_stop_at else { return };
@@ -968,7 +1107,16 @@ impl RobotScreen {
     /// the OS stream starts, and register a parallel `camera_frame_input`
     /// callback so we get RGBA frames for inference.
     fn start_camera_preview(&mut self, cx: &mut Cx) {
-        if self.capture.is_some() {
+        // Our own state is the source of truth for "is the camera running".
+        // The Video widget's `is_unprepared()` lags behind because Makepad's
+        // cleanup is async — after a Close-camera, the widget can stay in
+        // the "prepared" state for several frames, which used to cause the
+        // next Open-camera to bail out early before the camera was
+        // re-registered (logcat 2026-06-09 10:25:01 "video already prepared,
+        // skipping start"). Skip only if we already think the camera is
+        // running; otherwise force-cleanup any lingering widget state and
+        // proceed with a fresh start.
+        if self.camera_running {
             return;
         }
         let choice = VoipGlobalState::get_camera_choice(cx);
@@ -977,34 +1125,52 @@ impl RobotScreen {
             return;
         };
         let video = self.view.video(cx, ids!(preview_video));
-        if !video.is_unprepared() {
-            log!("RobotScreen: video already prepared, skipping start");
-            return;
+        if !video.is_unprepared() && !video.is_cleaning_up() {
+            log!("RobotScreen: video widget left prepared from a previous session, cleaning up before restart");
+            video.stop_and_cleanup_resources(cx);
         }
         log!(
             "RobotScreen: starting camera {} ({}x{} {:?})",
             choice.name, choice.width, choice.height, choice.pixel_format
         );
 
-        // The webcam_view container is always visible (it's pinned to the
-        // top-right of the panel); we only flip the Video widget itself on
-        // BEFORE begin_playback so Makepad's native preview can attach its
-        // overlay layer to the now-visible draw list.
-        let video = self.view.video(cx, ids!(preview_video));
-        video.set_visible(cx, true);
-
-        // Native preview mode. Texture mode is not implemented on macOS in
-        // this Makepad version and falls back to Native anyway — leaving the
-        // explicit Native here keeps the launch log clean.
-        video.set_camera_preview_mode(cx, VideoCameraPreviewMode::Native);
-        video.set_source_camera(cx, choice.input_id, choice.format_id);
-        video.begin_playback(cx);
-
-        // Spin up the inference capture path. On macOS this opens a parallel
-        // AVCaptureSession (BGRA-aware) so OBS Virtual Camera frames still
-        // reach the heuristic. On other platforms it rides Makepad's
-        // camera_frame_input callback.
+        // Open the parallel inference camera. macOS uses AvfCapture
+        // (parallel AVCaptureSession), Android uses AcameraCapture
+        // (parallel Camera2 NDK session), and elsewhere we ride Makepad's
+        // `cx.camera_frame_input` callback. All three return the same
+        // `try_recv() -> Option<WebRtcVideoFrame>` shape so the rest of
+        // the start-camera path doesn't care which platform it's on.
         self.capture = start_inference_capture(cx);
+
+        // Drive Makepad's Video widget through its preview path on every
+        // platform EXCEPT Android. On Android, Camera2 normally allows
+        // only one active session per camera device, so if we also fired
+        // up the Video widget's Native preview session it would conflict
+        // with AcameraCapture's session and one of the two would fail.
+        // The webcam_view tile stays visible (dark grey) so the layout
+        // doesn't collapse; inference still runs in the background.
+        #[cfg(not(target_os = "android"))]
+        {
+            let video = self.view.video(cx, ids!(preview_video));
+            video.set_visible(cx, true);
+            // Native preview mode. Texture mode is not implemented on
+            // macOS in this Makepad version and falls back to Native
+            // anyway — leaving the explicit Native here keeps the launch
+            // log clean.
+            video.set_camera_preview_mode(cx, VideoCameraPreviewMode::Native);
+            video.set_source_camera(cx, choice.input_id, choice.format_id);
+            video.begin_playback(cx);
+        }
+        // On Android, the `Video` widget stays hidden (see DSL note); the
+        // live preview surface is the sibling `WebRtcVideo` that
+        // `pump_camera_frames` will start pushing AcameraCapture frames
+        // into on the next NextFrame.
+        #[cfg(target_os = "android")]
+        {
+            self.view
+                .web_rtc_video(cx, ids!(preview_video_push))
+                .set_visible(cx, true);
+        }
         self.camera_running = true;
 
         self.view
@@ -1029,6 +1195,15 @@ impl RobotScreen {
         // stays visible (just shows the dark gray background) so the slot
         // doesn't collapse when the camera is closed.
         self.view.video(cx, ids!(preview_video)).set_visible(cx, false);
+        // On Android, also hide + clear the WebRtcVideo that was showing
+        // the AcameraCapture frames; otherwise the last frame would stay
+        // frozen on screen after Close camera.
+        #[cfg(target_os = "android")]
+        {
+            let push = self.view.web_rtc_video(cx, ids!(preview_video_push));
+            push.set_visible(cx, false);
+            push.clear_frame(cx);
+        }
         self.view
             .button(cx, ids!(btn_camera))
             .set_text(cx, "Open camera");
@@ -1036,19 +1211,53 @@ impl RobotScreen {
     }
 
     /// Pull pending frames from the camera callback and forward the newest to
-    /// the inference worker. Display is handled by Makepad's Video widget
-    /// directly — we don't push frames to it ourselves.
-    fn pump_camera_frames(&mut self, _cx: &mut Cx) {
-        let Some(cap) = self.capture.as_ref() else { return };
-        // Drain anything backed up; we only keep the newest so inference always
-        // runs on the freshest possible frame.
-        let mut newest: Option<WebRtcVideoFrame> = None;
-        while let Some(f) = cap.try_recv() {
-            newest = Some(f);
+    /// the inference worker. On non-Android targets, display is handled by
+    /// Makepad's `Video` widget driving its own preview session — we don't
+    /// push frames to it. On Android, we also push the freshest frame into
+    /// the sibling `WebRtcVideo` widget so the user sees a live preview
+    /// (the `Video` widget can't run in parallel with `AcameraCapture`).
+    fn pump_camera_frames(&mut self, cx: &mut Cx) {
+        // Scoped so the immutable borrow of `self.capture` is released
+        // before we touch `self.view` below.
+        let newest: Option<WebRtcVideoFrame> = {
+            let Some(cap) = self.capture.as_ref() else { return };
+            let mut newest = None;
+            while let Some(f) = cap.try_recv() {
+                newest = Some(f);
+            }
+            newest
+        };
+        let Some(frame) = newest else { return };
+        // On Android we orient the frame ONCE before both the live preview
+        // and the inference path so the two stay spatially identical —
+        // whatever the user sees on the preview tile is exactly what the
+        // hand-landmark model and motion tracker see.
+        //
+        // Two transforms:
+        //   1. 90° CCW rotation — Camera2's landscape sensor frame → the
+        //      portrait orientation the user is holding the phone in.
+        //   2. Horizontal mirror — undo the front-camera selfie flip so
+        //      left/right in the inference frame match left/right as the
+        //      user perceives them in physical space. (The same flip used
+        //      to live inside `submit_frame_for_inference`; on Android
+        //      it's lifted up here and skipped there to keep display +
+        //      inference in lockstep.)
+        #[cfg(target_os = "android")]
+        let frame = {
+            let mut f = rotate_rgba_ccw_90(&frame);
+            mirror_rgba_horizontal_in_place(&mut f.data, f.width, f.height);
+            f
+        };
+        #[cfg(target_os = "android")]
+        {
+            let display_frame = frame.clone();
+            self.view
+                .web_rtc_video(cx, ids!(preview_video_push))
+                .set_frame(cx, display_frame);
         }
-        if let Some(frame) = newest {
-            self.submit_frame_for_inference(frame);
-        }
+        #[cfg(not(target_os = "android"))]
+        let _ = cx; // `cx` is only used on Android; suppress the warning elsewhere
+        self.submit_frame_for_inference(frame);
     }
 
     /// Show the gesture pill on top of the webcam preview.
@@ -1112,6 +1321,53 @@ impl RobotScreen {
     }
 }
 
+/// Rotate a packed-RGBA frame by 90° counter-clockwise.
+///
+/// Camera2 on Android delivers frames in the sensor's natural (landscape)
+/// orientation — for a phone held in portrait, that's rotated 90° relative
+/// to what the user expects on the preview tile. We only rotate the display
+/// copy (called from `pump_camera_frames`); the inference path keeps the
+/// original orientation so the existing landmark-model calibration still
+/// holds.
+///
+/// Source dims (W, H) → destination dims (H, W). For each source pixel
+/// (sx, sy), its destination is (sy, W-1-sx).
+#[cfg(target_os = "android")]
+fn rotate_rgba_ccw_90(frame: &WebRtcVideoFrame) -> WebRtcVideoFrame {
+    let src_w = frame.width as usize;
+    let src_h = frame.height as usize;
+    let dst_w = src_h;
+    let dst_h = src_w;
+    let mut dst = vec![0u8; dst_w * dst_h * 4];
+    let src = &frame.data;
+    // Bail out if the source buffer is short — guards against malformed
+    // frames so we don't panic in the inner indexing loop.
+    if src.len() < src_w * src_h * 4 {
+        return WebRtcVideoFrame {
+            data: dst,
+            width: dst_w as u32,
+            height: dst_h as u32,
+            participant_id: frame.participant_id.clone(),
+        };
+    }
+    for sy in 0..src_h {
+        let src_row = sy * src_w * 4;
+        for sx in 0..src_w {
+            let dx = sy;
+            let dy = src_w - 1 - sx;
+            let src_idx = src_row + sx * 4;
+            let dst_idx = (dy * dst_w + dx) * 4;
+            dst[dst_idx..dst_idx + 4].copy_from_slice(&src[src_idx..src_idx + 4]);
+        }
+    }
+    WebRtcVideoFrame {
+        data: dst,
+        width: dst_w as u32,
+        height: dst_h as u32,
+        participant_id: frame.participant_id.clone(),
+    }
+}
+
 /// Horizontally flip a packed-RGBA buffer in place. Used to undo the selfie
 /// mirror on front-camera frames before they go to the hand-landmark model —
 /// see `RobotScreen::submit_frame_for_inference` for context.
@@ -1156,7 +1412,12 @@ fn start_inference_capture(_cx: &mut makepad_widgets::Cx) -> Option<InferenceCap
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "android")]
+fn start_inference_capture(cx: &mut makepad_widgets::Cx) -> Option<InferenceCapture> {
+    crate::gesture_control::acamera_capture::start_for_inference(cx)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "android")))]
 fn start_inference_capture(cx: &mut makepad_widgets::Cx) -> Option<InferenceCapture> {
     Some(crate::gesture_control::camera_capture::CameraCapture::start(cx))
 }

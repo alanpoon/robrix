@@ -14,9 +14,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
 use makepad_widgets::log;
-use matrix_sdk::reqwest;
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
 
 /// Filename of the hand-landmark ONNX model on disk and in the URL.
 ///
@@ -90,86 +88,43 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-/// Ensure the landmark ONNX file is present and valid on disk, downloading it
-/// if missing or corrupt. Async; suitable for calling from the inference
-/// worker's bootstrap path or a "Download model" button handler.
-pub async fn ensure_downloaded() -> Result<()> {
-    if MODEL_BASE_URL.is_empty() {
-        return Err(anyhow!(
-            "Robot model URL is not configured. Fill in `MODEL_BASE_URL` in \
-             gesture_control::model_downloader before first use."
-        ));
+/// Full URL the landmark model is fetched from.
+///
+/// Used by the caller (currently `RobotScreen`) which fires the actual GET
+/// through Makepad's `cx.http_request` — that path goes through the
+/// platform's native HTTPS stack (Android's `HttpURLConnection`, macOS's
+/// NSURLSession, etc.) and follows the GitHub-raw → media.githubusercontent
+/// redirect chain automatically, sidestepping reqwest's
+/// rustls-platform-verifier dependency which panics on Android without the
+/// JNI/Kotlin shim.
+pub fn landmark_download_url() -> String {
+    format!("{}/{}", MODEL_BASE_URL.trim_end_matches('/'), HAND_LANDMARK_FILENAME)
+}
+
+/// Verify the SHA-256 of the freshly-downloaded body and atomically install
+/// it at `hand_landmark_path()`. Writes to `<dest>.onnx.tmp` first then
+/// renames so a crashed download never leaves a corrupt file in place.
+pub fn install_landmark_model(bytes: &[u8]) -> Result<()> {
+    if !HAND_LANDMARK_SHA256.is_empty() {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        let actual = hex_encode(&hasher.finalize());
+        if actual != HAND_LANDMARK_SHA256 {
+            return Err(anyhow!(
+                "SHA-256 mismatch for {HAND_LANDMARK_FILENAME}: expected {HAND_LANDMARK_SHA256}, got {actual}"
+            ));
+        }
     }
 
     std::fs::create_dir_all(models_dir())
         .with_context(|| format!("create dir {}", models_dir().display()))?;
 
-    let client = reqwest::Client::builder()
-        // GitHub LFS redirect → S3 can take longer than a typical small file.
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .context("build reqwest client")?;
-
-    download_if_invalid(
-        &client,
-        HAND_LANDMARK_FILENAME,
-        HAND_LANDMARK_SHA256,
-        &hand_landmark_path(),
-    )
-    .await?;
-
-    Ok(())
-}
-
-async fn download_if_invalid(
-    client: &reqwest::Client,
-    filename: &str,
-    expected_sha: &str,
-    dest: &std::path::Path,
-) -> Result<()> {
-    if file_valid(dest, expected_sha) {
-        return Ok(());
-    }
-    let url = format!("{}/{}", MODEL_BASE_URL.trim_end_matches('/'), filename);
-    log!("downloading {filename} from {url}");
-
-    let bytes = client
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| format!("GET {url}"))?
-        .error_for_status()
-        .with_context(|| format!("HTTP error for {url}"))?
-        .bytes()
-        .await
-        .with_context(|| format!("read body of {url}"))?;
-
-    if !expected_sha.is_empty() {
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        let actual = hex_encode(&hasher.finalize());
-        if actual != expected_sha {
-            return Err(anyhow!(
-                "SHA-256 mismatch for {filename}: expected {expected_sha}, got {actual}"
-            ));
-        }
-    }
-
-    // Write to a temp file then rename so we never leave a partial file
-    // looking valid on a future startup.
+    let dest = hand_landmark_path();
     let tmp = dest.with_extension("onnx.tmp");
-    let mut f = tokio::fs::File::create(&tmp)
-        .await
-        .with_context(|| format!("create {}", tmp.display()))?;
-    f.write_all(&bytes)
-        .await
+    std::fs::write(&tmp, bytes)
         .with_context(|| format!("write {}", tmp.display()))?;
-    f.flush().await.with_context(|| format!("flush {}", tmp.display()))?;
-    drop(f);
-    tokio::fs::rename(&tmp, dest)
-        .await
+    std::fs::rename(&tmp, &dest)
         .with_context(|| format!("rename {} -> {}", tmp.display(), dest.display()))?;
 
-    log!("downloaded {filename} ({} bytes) ✓", bytes.len());
     Ok(())
 }
