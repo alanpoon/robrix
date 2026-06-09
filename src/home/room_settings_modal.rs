@@ -6,11 +6,155 @@ use makepad_widgets::*;
 use ruma::OwnedRoomId;
 
 use crate::shared::avatar::AvatarWidgetExt;
+use crate::shared::popup_list::{PopupKind, enqueue_popup_notification};
+use crate::sliding_sync::{
+    MatrixRequest, PowerLevelsChangesPayload, PowerLevelsSnapshot,
+    RoomPowerLevelsAction, submit_async_request,
+};
 use crate::utils::load_png_or_jpg;
+
+/// Which tab of the [`RoomSettingsModal`] is currently visible.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+enum SettingsTab {
+    #[default]
+    General,
+    Permissions,
+}
+
+/// Identifiers for every row in the permissions section, in the order the
+/// rows appear in the DSL. Used as a stable enum so we can iterate rows when
+/// building the save payload.
+#[derive(Copy, Clone, Debug)]
+enum PermissionRowId {
+    UsersDefault,
+    EventsDefault,
+    Invite,
+    StateDefault,
+    RoomName,
+    RoomTopic,
+    RoomAvatar,
+    Redact,
+    Kick,
+    Ban,
+}
+
+impl PermissionRowId {
+    const ALL: [PermissionRowId; 10] = [
+        PermissionRowId::UsersDefault,
+        PermissionRowId::EventsDefault,
+        PermissionRowId::Invite,
+        PermissionRowId::StateDefault,
+        PermissionRowId::RoomName,
+        PermissionRowId::RoomTopic,
+        PermissionRowId::RoomAvatar,
+        PermissionRowId::Redact,
+        PermissionRowId::Kick,
+        PermissionRowId::Ban,
+    ];
+
+    fn snapshot_value(self, snap: &PowerLevelsSnapshot) -> i64 {
+        match self {
+            PermissionRowId::UsersDefault => snap.users_default,
+            PermissionRowId::EventsDefault => snap.events_default,
+            PermissionRowId::Invite => snap.invite,
+            PermissionRowId::StateDefault => snap.state_default,
+            PermissionRowId::RoomName => snap.room_name,
+            PermissionRowId::RoomTopic => snap.room_topic,
+            PermissionRowId::RoomAvatar => snap.room_avatar,
+            PermissionRowId::Redact => snap.redact,
+            PermissionRowId::Kick => snap.kick,
+            PermissionRowId::Ban => snap.ban,
+        }
+    }
+
+    /// Apply a new PL value to the corresponding field of `changes`.
+    fn assign_change(self, changes: &mut PowerLevelsChangesPayload, value: i64) {
+        match self {
+            PermissionRowId::UsersDefault => changes.users_default = Some(value),
+            PermissionRowId::EventsDefault => changes.events_default = Some(value),
+            PermissionRowId::Invite => changes.invite = Some(value),
+            PermissionRowId::StateDefault => changes.state_default = Some(value),
+            PermissionRowId::RoomName => changes.room_name = Some(value),
+            PermissionRowId::RoomTopic => changes.room_topic = Some(value),
+            PermissionRowId::RoomAvatar => changes.room_avatar = Some(value),
+            PermissionRowId::Redact => changes.redact = Some(value),
+            PermissionRowId::Kick => changes.kick = Some(value),
+            PermissionRowId::Ban => changes.ban = Some(value),
+        }
+    }
+}
+
+/// Maps a raw power-level value to a dropdown index (0/1/2/3 for
+/// Default/Moderator/Admin/Custom\u{2026}).
+fn pl_to_dropdown_index(pl: i64) -> usize {
+    match pl {
+        0 => 0,
+        50 => 1,
+        100 => 2,
+        _ => 3,
+    }
+}
 
 script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
+
+    let PermissionRow = View {
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 4
+        margin: Inset{bottom: 12}
+
+        row_label := Label {
+            width: Fill
+            height: Fit
+            margin: Inset{bottom: 2}
+            draw_text +: {
+                text_style: REGULAR_TEXT {font_size: 10.5}
+                color: #333
+            }
+            text: ""
+        }
+
+        row_main := View {
+            width: Fill
+            height: Fit
+            flow: Right
+            spacing: 8
+            align: Align{y: 0.5}
+
+            row_dropdown := DropDownFlat {
+                width: 160
+                height: 32
+                align: Align{y: 0.5}
+                padding: Inset{left: 10, top: 6, bottom: 6, right: 28}
+                draw_text +: {
+                    text_style: REGULAR_TEXT { font_size: 11 }
+                    color: #333
+                }
+                draw_bg +: {
+                    color: uniform(#fff)
+                    color_hover: uniform(#F0F0F2)
+                    color_focus: uniform(#F0F0F2)
+                    color_down: uniform(#E8E8EA)
+                    border_color: uniform(#CCC)
+                    border_color_hover: uniform(#AAA)
+                    border_color_focus: uniform((COLOR_ACTIVE_PRIMARY))
+                    arrow_color: uniform(#888)
+                    arrow_color_hover: uniform(#555)
+                }
+                labels: ["Default", "Moderator", "Admin", "Custom\u{2026}"]
+            }
+
+            row_custom_input := RobrixTextInput {
+                visible: false
+                width: 80
+                height: 32
+                empty_text: "PL"
+            }
+        }
+    }
 
     mod.widgets.RoomSettingsModal = #(RoomSettingsModal::register_widget(vm)) {
         width: Fit
@@ -99,6 +243,27 @@ script_mod! {
                         }
                         text: "General"
                     }
+
+                    permissions_tab_button := RobrixNeutralIconButton {
+                        width: Fill
+                        height: 36
+                        padding: Inset{left: 12, right: 8, top: 8, bottom: 8}
+                        align: Align{x: 0.0, y: 0.5}
+                        icon_walk: Walk{width: 0, height: 0}
+                        draw_bg +: {
+                            color: #F3F5F8
+                            color_hover: #DDE6F0
+                            color_down: #D0DBE8
+                            border_radius: 0.0
+                        }
+                        draw_text +: {
+                            color: #000
+                            color_hover: #000
+                            color_down: #000
+                            text_style: REGULAR_TEXT {font_size: 11}
+                        }
+                        text: "Roles & Permissions"
+                    }
                 }
 
                 // Content area
@@ -108,6 +273,12 @@ script_mod! {
                     flow: Down
                     spacing: 0
                     padding: Inset{left: 24, right: 24, top: 20, bottom: 20}
+
+                    general_section := View {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        visible: true
 
                     // ── General heading ──────────────────────────────
                     general_heading := Label {
@@ -520,6 +691,84 @@ script_mod! {
                         icon_walk: Walk{width: 0, height: 0}
                         text: "Leave room"
                     }
+                    }  // end general_section
+
+                    permissions_section := View {
+                        width: Fill
+                        height: Fit
+                        flow: Down
+                        visible: false
+
+                        permissions_heading := Label {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{bottom: 8}
+                            draw_text +: {
+                                text_style: TITLE_TEXT {font_size: 13}
+                                color: #000
+                            }
+                            text: "Roles & Permissions"
+                        }
+
+                        permissions_subtext := Label {
+                            width: Fill
+                            height: Fit
+                            flow: Flow.Right{wrap: true}
+                            margin: Inset{bottom: 14}
+                            draw_text +: {
+                                text_style: REGULAR_TEXT {font_size: 10.5}
+                                color: #666
+                            }
+                            text: "Set the minimum role required to perform each action in this room. Changes are sent to the server when you click Save."
+                        }
+
+                        permissions_status_label := Label {
+                            width: Fill
+                            height: Fit
+                            margin: Inset{bottom: 10}
+                            draw_text +: {
+                                text_style: REGULAR_TEXT {font_size: 10.5}
+                                color: #888
+                            }
+                            text: "Loading permissions\u{2026}"
+                        }
+
+                        pl_row_users_default := PermissionRow { row_label: { text: "Default role for new members" } }
+                        pl_row_events_default := PermissionRow { row_label: { text: "Send messages" } }
+                        pl_row_invite := PermissionRow { row_label: { text: "Invite users" } }
+                        pl_row_state_default := PermissionRow { row_label: { text: "Change room settings" } }
+                        pl_row_room_name := PermissionRow { row_label: { text: "Change room name" } }
+                        pl_row_room_topic := PermissionRow { row_label: { text: "Change room topic" } }
+                        pl_row_room_avatar := PermissionRow { row_label: { text: "Change room avatar" } }
+                        pl_row_redact := PermissionRow { row_label: { text: "Remove messages" } }
+                        pl_row_kick := PermissionRow { row_label: { text: "Kick users" } }
+                        pl_row_ban := PermissionRow { row_label: { text: "Ban users" } }
+
+                        permissions_buttons_row := View {
+                            width: Fill
+                            height: Fit
+                            flow: Right
+                            align: Align{x: 1.0, y: 0.5}
+                            margin: Inset{top: 20}
+                            spacing: 10
+
+                            permissions_cancel_button := RobrixNeutralIconButton {
+                                width: 100
+                                height: 32
+                                padding: 6
+                                icon_walk: Walk{width: 0, height: 0}
+                                text: "Cancel"
+                            }
+
+                            permissions_save_button := RobrixIconButton {
+                                width: 100
+                                height: 32
+                                padding: 6
+                                icon_walk: Walk{width: 0, height: 0}
+                                text: "Save"
+                            }
+                        }
+                    }  // end permissions_section
                 }
             }
         }
@@ -559,6 +808,10 @@ pub struct RoomSettingsModal {
     #[rust] original_name: String,
     #[rust] original_topic: String,
     #[rust] always_show_media: bool,
+    #[rust] active_tab: SettingsTab,
+    /// Most recently fetched snapshot of the room's PL thresholds. `None`
+    /// until the GetRoomPowerLevels response arrives.
+    #[rust] permissions_snapshot: Option<PowerLevelsSnapshot>,
 }
 
 impl Widget for RoomSettingsModal {
@@ -574,6 +827,74 @@ impl Widget for RoomSettingsModal {
 
 impl WidgetMatchEvent for RoomSettingsModal {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions, _scope: &mut Scope) {
+        // Tab switching
+        if self.view.button(cx, ids!(general_tab_button)).clicked(actions) {
+            self.set_active_tab(cx, SettingsTab::General);
+            return;
+        }
+        if self.view.button(cx, ids!(permissions_tab_button)).clicked(actions) {
+            self.set_active_tab(cx, SettingsTab::Permissions);
+            return;
+        }
+
+        // Permissions tab: per-row dropdown change reveals/hides custom input
+        if self.active_tab == SettingsTab::Permissions {
+            self.handle_permission_row_dropdowns(cx, actions);
+
+            if self.view.button(cx, ids!(permissions_cancel_button)).clicked(actions) {
+                // Reset edits back to the snapshot.
+                if self.permissions_snapshot.is_some() {
+                    self.populate_permission_rows(cx);
+                }
+                return;
+            }
+
+            if self.view.button(cx, ids!(permissions_save_button)).clicked(actions) {
+                self.dispatch_permission_save(cx);
+                return;
+            }
+        }
+
+        // Permissions: fetch response actions
+        for action in actions {
+            if let Some(pl_action) = action.downcast_ref::<RoomPowerLevelsAction>() {
+                let room_id_matches = self.room_id.as_ref().is_some_and(|rid| {
+                    match pl_action {
+                        RoomPowerLevelsAction::Fetched { room_id, .. }
+                        | RoomPowerLevelsAction::FetchFailed { room_id, .. }
+                        | RoomPowerLevelsAction::Applied { room_id }
+                        | RoomPowerLevelsAction::ApplyFailed { room_id, .. } => room_id == rid,
+                    }
+                });
+                if !room_id_matches { continue }
+                match pl_action {
+                    RoomPowerLevelsAction::Fetched { levels, .. } => {
+                        self.permissions_snapshot = Some(levels.clone());
+                        self.populate_permission_rows(cx);
+                        self.view.label(cx, ids!(permissions_status_label))
+                            .set_visible(cx, false);
+                        self.view.redraw(cx);
+                    }
+                    RoomPowerLevelsAction::FetchFailed { error, .. } => {
+                        self.view.label(cx, ids!(permissions_status_label))
+                            .set_text(cx, &format!("Failed to load permissions: {error}"));
+                        self.view.redraw(cx);
+                    }
+                    RoomPowerLevelsAction::Applied { .. } => {
+                        // Refresh snapshot from server after a successful apply
+                        // so subsequent edits compare against the new baseline.
+                        if let Some(room_id) = self.room_id.clone() {
+                            submit_async_request(MatrixRequest::FetchRoomPowerLevelsSnapshot { room_id });
+                        }
+                    }
+                    RoomPowerLevelsAction::ApplyFailed { .. } => {
+                        // Popup already enqueued by the handler. Leave the
+                        // draft edits in place so the user can retry.
+                    }
+                }
+            }
+        }
+
         // Close button
         if self.view.button(cx, ids!(close_button)).clicked(actions) {
             cx.action(RoomSettingsAction::Close);
@@ -671,6 +992,154 @@ impl WidgetMatchEvent for RoomSettingsModal {
 }
 
 impl RoomSettingsModal {
+    fn set_active_tab(&mut self, cx: &mut Cx, tab: SettingsTab) {
+        self.active_tab = tab;
+        let (general_visible, permissions_visible) = match tab {
+            SettingsTab::General => (true, false),
+            SettingsTab::Permissions => (false, true),
+        };
+        self.view.view(cx, ids!(general_section)).set_visible(cx, general_visible);
+        self.view.view(cx, ids!(permissions_section)).set_visible(cx, permissions_visible);
+
+        if tab == SettingsTab::Permissions && self.permissions_snapshot.is_none() {
+            if let Some(room_id) = self.room_id.clone() {
+                self.view.label(cx, ids!(permissions_status_label))
+                    .set_visible(cx, true);
+                self.view.label(cx, ids!(permissions_status_label))
+                    .set_text(cx, "Loading permissions\u{2026}");
+                submit_async_request(MatrixRequest::FetchRoomPowerLevelsSnapshot { room_id });
+            }
+        } else if tab == SettingsTab::Permissions {
+            self.populate_permission_rows(cx);
+        }
+        self.view.redraw(cx);
+    }
+
+    /// Returns the dropdown widget for a given row id.
+    fn row_dropdown(&mut self, cx: &mut Cx, row_id: PermissionRowId) -> DropDownRef {
+        match row_id {
+            PermissionRowId::UsersDefault => self.view.drop_down(cx, ids!(pl_row_users_default.row_main.row_dropdown)),
+            PermissionRowId::EventsDefault => self.view.drop_down(cx, ids!(pl_row_events_default.row_main.row_dropdown)),
+            PermissionRowId::Invite => self.view.drop_down(cx, ids!(pl_row_invite.row_main.row_dropdown)),
+            PermissionRowId::StateDefault => self.view.drop_down(cx, ids!(pl_row_state_default.row_main.row_dropdown)),
+            PermissionRowId::RoomName => self.view.drop_down(cx, ids!(pl_row_room_name.row_main.row_dropdown)),
+            PermissionRowId::RoomTopic => self.view.drop_down(cx, ids!(pl_row_room_topic.row_main.row_dropdown)),
+            PermissionRowId::RoomAvatar => self.view.drop_down(cx, ids!(pl_row_room_avatar.row_main.row_dropdown)),
+            PermissionRowId::Redact => self.view.drop_down(cx, ids!(pl_row_redact.row_main.row_dropdown)),
+            PermissionRowId::Kick => self.view.drop_down(cx, ids!(pl_row_kick.row_main.row_dropdown)),
+            PermissionRowId::Ban => self.view.drop_down(cx, ids!(pl_row_ban.row_main.row_dropdown)),
+        }
+    }
+
+    fn row_custom_input(&mut self, cx: &mut Cx, row_id: PermissionRowId) -> TextInputRef {
+        match row_id {
+            PermissionRowId::UsersDefault => self.view.text_input(cx, ids!(pl_row_users_default.row_main.row_custom_input)),
+            PermissionRowId::EventsDefault => self.view.text_input(cx, ids!(pl_row_events_default.row_main.row_custom_input)),
+            PermissionRowId::Invite => self.view.text_input(cx, ids!(pl_row_invite.row_main.row_custom_input)),
+            PermissionRowId::StateDefault => self.view.text_input(cx, ids!(pl_row_state_default.row_main.row_custom_input)),
+            PermissionRowId::RoomName => self.view.text_input(cx, ids!(pl_row_room_name.row_main.row_custom_input)),
+            PermissionRowId::RoomTopic => self.view.text_input(cx, ids!(pl_row_room_topic.row_main.row_custom_input)),
+            PermissionRowId::RoomAvatar => self.view.text_input(cx, ids!(pl_row_room_avatar.row_main.row_custom_input)),
+            PermissionRowId::Redact => self.view.text_input(cx, ids!(pl_row_redact.row_main.row_custom_input)),
+            PermissionRowId::Kick => self.view.text_input(cx, ids!(pl_row_kick.row_main.row_custom_input)),
+            PermissionRowId::Ban => self.view.text_input(cx, ids!(pl_row_ban.row_main.row_custom_input)),
+        }
+    }
+
+    /// Populate every permission row's dropdown + custom input from the
+    /// currently-stored snapshot. No-op when the snapshot is not yet loaded.
+    fn populate_permission_rows(&mut self, cx: &mut Cx) {
+        let Some(snap) = self.permissions_snapshot.clone() else { return };
+        for row_id in PermissionRowId::ALL {
+            let pl = row_id.snapshot_value(&snap);
+            let idx = pl_to_dropdown_index(pl);
+            self.row_dropdown(cx, row_id).set_selected_item(cx, idx);
+            let input = self.row_custom_input(cx, row_id);
+            input.set_visible(cx, idx == 3);
+            input.set_text(cx, &pl.to_string());
+        }
+    }
+
+    /// Detect any dropdown changes this frame and reveal/hide the per-row
+    /// custom input accordingly.
+    fn handle_permission_row_dropdowns(&mut self, cx: &mut Cx, actions: &Actions) {
+        for row_id in PermissionRowId::ALL {
+            let dd = self.row_dropdown(cx, row_id);
+            if dd.changed(actions).is_some() {
+                let idx = dd.selected_item();
+                let input = self.row_custom_input(cx, row_id);
+                let was_custom = input.borrow().is_some_and(|i| i.visible());
+                input.set_visible(cx, idx == 3);
+                if idx == 3 && !was_custom {
+                    // Pre-fill with the current snapshot value when first
+                    // opening the custom input.
+                    if let Some(snap) = self.permissions_snapshot.as_ref() {
+                        let pl = row_id.snapshot_value(snap);
+                        input.set_text(cx, &pl.to_string());
+                    }
+                }
+                self.view.redraw(cx);
+            }
+        }
+    }
+
+    /// Build a `PowerLevelsChangesPayload` containing only the rows that
+    /// changed from the snapshot, then dispatch it. Invalid custom inputs
+    /// (non-integer text) abort the save with a popup notification.
+    fn dispatch_permission_save(&mut self, cx: &mut Cx) {
+        let Some(snap) = self.permissions_snapshot.clone() else {
+            enqueue_popup_notification(
+                "Permissions not loaded yet \u{2014} please wait.",
+                PopupKind::Warning,
+                Some(3.0),
+            );
+            return;
+        };
+        let Some(room_id) = self.room_id.clone() else { return };
+
+        let mut changes = PowerLevelsChangesPayload::default();
+        let mut any_change = false;
+        for row_id in PermissionRowId::ALL {
+            let idx = self.row_dropdown(cx, row_id).selected_item();
+            let new_pl: i64 = match idx {
+                0 => 0,
+                1 => 50,
+                2 => 100,
+                3 => {
+                    let text = self.row_custom_input(cx, row_id).text();
+                    match text.trim().parse::<i64>() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            enqueue_popup_notification(
+                                format!("Invalid power level \"{}\" \u{2014} enter an integer.", text.trim()),
+                                PopupKind::Error,
+                                None,
+                            );
+                            return;
+                        }
+                    }
+                }
+                _ => row_id.snapshot_value(&snap),
+            };
+            let current = row_id.snapshot_value(&snap);
+            if new_pl != current {
+                row_id.assign_change(&mut changes, new_pl);
+                any_change = true;
+            }
+        }
+
+        if !any_change {
+            enqueue_popup_notification(
+                "No permission changes to save.",
+                PopupKind::Info,
+                Some(2.5),
+            );
+            return;
+        }
+
+        submit_async_request(MatrixRequest::ApplyRoomPowerLevelChanges { room_id, changes });
+    }
+
     /// Populate the modal with room data and prepare for display.
     pub fn show(
         &mut self,
@@ -684,6 +1153,14 @@ impl RoomSettingsModal {
         self.original_name = room_name.to_string();
         self.original_topic = room_topic.to_string();
         self.always_show_media = false;
+        // Reset the permissions tab so previous-room data isn't shown.
+        self.active_tab = SettingsTab::General;
+        self.permissions_snapshot = None;
+        self.view.view(cx, ids!(general_section)).set_visible(cx, true);
+        self.view.view(cx, ids!(permissions_section)).set_visible(cx, false);
+        self.view.label(cx, ids!(permissions_status_label)).set_visible(cx, true);
+        self.view.label(cx, ids!(permissions_status_label))
+            .set_text(cx, "Loading permissions\u{2026}");
 
         // Update title
         self.view.label(cx, ids!(title_label))

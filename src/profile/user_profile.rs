@@ -2,7 +2,7 @@
 
 use std::{borrow::Cow, ops::{Deref, DerefMut}};
 use makepad_widgets::*;
-use matrix_sdk::{room::{RoomMember, RoomMemberRole}, ruma::{events::room::member::MembershipState, int, OwnedRoomId, OwnedUserId}};
+use matrix_sdk::{room::{RoomMember, RoomMemberRole}, ruma::{events::{room::{member::MembershipState, power_levels::UserPowerLevel}}, int, OwnedRoomId, OwnedUserId}};
 use crate::{
     app::AppState, avatar_cache, shared::{avatar::{AvatarState, AvatarWidgetExt}, popup_list::{PopupKind, enqueue_popup_notification}}, sliding_sync::{MatrixRequest, UserPowerLevels, current_user_id, is_user_ignored, submit_async_request}, utils
 };
@@ -41,6 +41,36 @@ impl UserProfile {
     }
 }
 
+
+/// Returns the index of the option in `power_level_dropdown` that matches
+/// the given member's current raw power level. Returns 3 ("Custom\u{2026}")
+/// when the level is not one of the named presets (0/50/100). The Creator's
+/// `Infinite` level maps to "Admin".
+fn current_power_level_dropdown_index(room_member: &RoomMember) -> usize {
+    match room_member.power_level() {
+        UserPowerLevel::Infinite => 2,
+        UserPowerLevel::Int(i) => {
+            let pl: i64 = i.into();
+            match pl {
+                0 => 0,
+                50 => 1,
+                100 => 2,
+                _ => 3,
+            }
+        }
+        _ => 3,
+    }
+}
+
+/// The raw i64 power level of a member, treating Creator's `Infinite` as 100
+/// (the conventional display value for the Custom… input pre-fill).
+fn member_raw_power_level(room_member: &RoomMember) -> i64 {
+    match room_member.power_level() {
+        UserPowerLevel::Infinite => 100,
+        UserPowerLevel::Int(i) => i.into(),
+        _ => 0,
+    }
+}
 
 /// Basic info needed to populate the contents of an avatar widget.
 #[derive(Clone, Debug)]
@@ -204,7 +234,31 @@ script_mod! {
                         arrow_color: uniform(#888)
                         arrow_color_hover: uniform(#555)
                     }
-                    labels: ["Default", "Moderator", "Admin"]
+                    labels: ["Default", "Moderator", "Admin", "Custom\u{2026}"]
+                }
+
+                custom_power_level_row := View {
+                    visible: false,
+                    width: Fill,
+                    height: Fit,
+                    flow: Right,
+                    spacing: 6,
+                    margin: Inset{top: 4}
+
+                    custom_power_level_input := RobrixTextInput {
+                        width: Fill,
+                        height: 36,
+                        empty_text: "-100..100"
+                    }
+
+                    apply_custom_power_level_button := RobrixIconButton {
+                        width: 80,
+                        height: 36,
+                        padding: Inset{left: 8, right: 8, top: 6, bottom: 6}
+                        align: Align{x: 0.5, y: 0.5}
+                        icon_walk: Walk{width: 0, height: 0}
+                        text: "Apply"
+                    }
                 }
             }
         }
@@ -426,15 +480,27 @@ impl UserProfilePaneInfo {
     }
 
     fn role_in_room(&self) -> Cow<'_, str> {
-        self.room_member.as_ref().map_or(
-            "Role: Unknown".into(),
-            |member| match member.suggested_role_for_power_level() {
-                RoomMemberRole::Creator => "Role: Creator".into(),
-                RoomMemberRole::Administrator => "Role: Admin".into(),
-                RoomMemberRole::Moderator => "Role: Moderator".into(),
-                RoomMemberRole::User => "Role: Standard User".into(),
+        let Some(member) = self.room_member.as_ref() else {
+            return "Role: Unknown".into();
+        };
+        let role_name = match member.suggested_role_for_power_level() {
+            RoomMemberRole::Creator => "Creator",
+            RoomMemberRole::Administrator => "Admin",
+            RoomMemberRole::Moderator => "Moderator",
+            RoomMemberRole::User => "Standard User",
+        };
+        match member.power_level() {
+            UserPowerLevel::Infinite => format!("Role: {role_name} (\u{221E})").into(),
+            UserPowerLevel::Int(i) => {
+                let pl: i64 = i.into();
+                if pl <= -1 {
+                    format!("Role: {role_name} ({pl}, muted)").into()
+                } else {
+                    format!("Role: {role_name} ({pl})").into()
+                }
             }
-        )
+            _ => format!("Role: {role_name}").into(),
+        }
     }
 }
 
@@ -561,24 +627,55 @@ impl Widget for UserProfileSlidingPane {
                 && !room_member.is_account_user()
             {
                 let selected_item = power_level_dropdown.selected_item();
-                let selected_role = match selected_item {
-                    0 => None,
-                    1 => Some(RoomMemberRole::Moderator),
-                    2 => Some(RoomMemberRole::Administrator),
-                    _ => None,
-                };
-                let current_selected_item = match room_member.suggested_role_for_power_level() {
-                    RoomMemberRole::Creator | RoomMemberRole::Administrator => 2,
-                    RoomMemberRole::Moderator => 1,
-                    RoomMemberRole::User => 0,
-                };
-                if selected_item != current_selected_item {
+                let current_selected_item = current_power_level_dropdown_index(room_member);
+                let room_id = info.room_id.clone();
+                let user_id = info.user_id.clone();
+                // Selecting "Custom…" (index 3) reveals the inline input;
+                // the request is dispatched only when the Apply button is clicked.
+                if selected_item == 3 {
+                    self.view(cx, ids!(custom_power_level_row)).set_visible(cx, true);
+                } else if selected_item != current_selected_item {
+                    self.view(cx, ids!(custom_power_level_row)).set_visible(cx, false);
+                    let selected_role = match selected_item {
+                        0 => None,
+                        1 => Some(RoomMemberRole::Moderator),
+                        2 => Some(RoomMemberRole::Administrator),
+                        _ => None,
+                    };
                     submit_async_request(MatrixRequest::SetRoomMemberPowerLevel {
-                        room_id: info.room_id.clone(),
-                        user_id: info.user_id.clone(),
+                        room_id,
+                        user_id,
                         room_member_role: selected_role,
                         raw_power_level: None,
                     });
+                } else {
+                    self.view(cx, ids!(custom_power_level_row)).set_visible(cx, false);
+                }
+            }
+
+            // Apply button on the Custom… numeric input.
+            if self.button(cx, ids!(apply_custom_power_level_button)).clicked(actions)
+                && info.can_change_room_power_levels()
+                && let Some(room_member) = info.room_member.as_ref()
+                && !room_member.is_account_user()
+            {
+                let raw_text = self.text_input(cx, ids!(custom_power_level_input)).text();
+                match raw_text.trim().parse::<i64>() {
+                    Ok(parsed) => {
+                        submit_async_request(MatrixRequest::SetRoomMemberPowerLevel {
+                            room_id: info.room_id.clone(),
+                            user_id: info.user_id.clone(),
+                            room_member_role: None,
+                            raw_power_level: Some(parsed),
+                        });
+                    }
+                    Err(_) => {
+                        enqueue_popup_notification(
+                            format!("Invalid power level: \"{}\". Enter an integer.", raw_text.trim()),
+                            PopupKind::Error,
+                            None,
+                        );
+                    }
                 }
             }
 
@@ -750,12 +847,20 @@ impl Widget for UserProfileSlidingPane {
         if show_power_level_controls
             && let Some(room_member) = info.room_member.as_ref()
         {
-            let selected_item = match room_member.suggested_role_for_power_level() {
-                RoomMemberRole::Creator | RoomMemberRole::Administrator => 2,
-                RoomMemberRole::Moderator => 1,
-                RoomMemberRole::User => 0,
-            };
+            let selected_item = current_power_level_dropdown_index(room_member);
             self.drop_down(cx, ids!(power_level_dropdown)).set_selected_item(cx, selected_item);
+            // When the member's PL doesn't match a preset, surface the
+            // Custom row with the raw value pre-filled so the user can
+            // adjust without retyping.
+            let is_custom = selected_item == 3;
+            self.view(cx, ids!(custom_power_level_row)).set_visible(cx, is_custom);
+            if is_custom {
+                let raw = member_raw_power_level(room_member);
+                self.text_input(cx, ids!(custom_power_level_input))
+                    .set_text(cx, &raw.to_string());
+            }
+        } else {
+            self.view(cx, ids!(custom_power_level_row)).set_visible(cx, false);
         }
 
         self.button(cx, ids!(direct_message_button)).set_visible(cx, !is_pane_showing_current_account);

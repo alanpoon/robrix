@@ -710,6 +710,51 @@ pub struct RoomAvatarUploadedAction {
     pub image_data: Arc<[u8]>,
 }
 
+/// A snapshot of the room's current power-level thresholds. All fields are
+/// non-optional because they always have a value at the server (defaults
+/// applied where the event content omits them).
+#[derive(Clone, Debug)]
+pub struct PowerLevelsSnapshot {
+    pub ban: i64,
+    pub invite: i64,
+    pub kick: i64,
+    pub redact: i64,
+    pub events_default: i64,
+    pub state_default: i64,
+    pub users_default: i64,
+    pub room_name: i64,
+    pub room_avatar: i64,
+    pub room_topic: i64,
+}
+
+/// A clone-able payload describing room-wide power-level changes. Mirrors
+/// `matrix_sdk::room::power_levels::RoomPowerLevelChanges` but is `Clone`
+/// (the matrix-sdk type is not) so it can be carried in actions and
+/// MatrixRequest variants.
+#[derive(Clone, Debug, Default)]
+pub struct PowerLevelsChangesPayload {
+    pub ban: Option<i64>,
+    pub invite: Option<i64>,
+    pub kick: Option<i64>,
+    pub redact: Option<i64>,
+    pub events_default: Option<i64>,
+    pub state_default: Option<i64>,
+    pub users_default: Option<i64>,
+    pub room_name: Option<i64>,
+    pub room_avatar: Option<i64>,
+    pub room_topic: Option<i64>,
+}
+
+/// Actions emitted in response to [`MatrixRequest::FetchRoomPowerLevelsSnapshot`]
+/// and [`MatrixRequest::ApplyRoomPowerLevelChanges`].
+#[derive(Clone, Debug)]
+pub enum RoomPowerLevelsAction {
+    Fetched { room_id: OwnedRoomId, levels: PowerLevelsSnapshot },
+    FetchFailed { room_id: OwnedRoomId, error: String },
+    Applied { room_id: OwnedRoomId },
+    ApplyFailed { room_id: OwnedRoomId, error: String },
+}
+
 /// Actions emitted in response to a [`MatrixRequest::GenerateMatrixLink`].
 #[derive(Clone, Debug)]
 pub enum MatrixLinkAction {
@@ -1325,6 +1370,21 @@ pub enum MatrixRequest {
         room_id: OwnedRoomId,
         user_id: OwnedUserId,
         reason: Option<String>,
+    },
+    /// Request a snapshot of the room's current power-level thresholds.
+    /// Response is dispatched as [`RoomPowerLevelsAction::Fetched`] on success,
+    /// or [`RoomPowerLevelsAction::FetchFailed`] on error. Distinct from the
+    /// existing `GetRoomPowerLevels` variant (which refreshes a timeline's
+    /// `user_power` via `TimelineUpdate::UserPowerLevels`).
+    FetchRoomPowerLevelsSnapshot {
+        room_id: OwnedRoomId,
+    },
+    /// Request to apply a set of room-wide power-level changes. Any field set
+    /// to `None` in `changes` is left unchanged on the server. Response is
+    /// dispatched as [`RoomPowerLevelsAction::Applied`] / `ApplyFailed`.
+    ApplyRoomPowerLevelChanges {
+        room_id: OwnedRoomId,
+        changes: PowerLevelsChangesPayload,
     },
     /// Request to upload and set the avatar of the current user's account.
     UploadAvatar {
@@ -4249,6 +4309,100 @@ async fn matrix_worker_task(
                                 PopupKind::Error,
                                 None,
                             );
+                        }
+                    }
+                });
+            }
+
+            MatrixRequest::FetchRoomPowerLevelsSnapshot { room_id } => {
+                let Some(client) = get_client() else { continue };
+                let _fetch_pl_task = Handle::current().spawn(async move {
+                    let Some(room) = client.get_room(&room_id) else {
+                        Cx::post_action(RoomPowerLevelsAction::FetchFailed {
+                            room_id: room_id.clone(),
+                            error: format!("Room {room_id} not found."),
+                        });
+                        return;
+                    };
+                    match room.power_levels().await {
+                        Ok(pl) => {
+                            let state = |key: matrix_sdk::ruma::events::StateEventType| -> i64 {
+                                pl.events
+                                    .get(&key.into())
+                                    .copied()
+                                    .map(|v| v.into())
+                                    .unwrap_or_else(|| pl.state_default.into())
+                            };
+                            let snapshot = PowerLevelsSnapshot {
+                                ban: pl.ban.into(),
+                                invite: pl.invite.into(),
+                                kick: pl.kick.into(),
+                                redact: pl.redact.into(),
+                                events_default: pl.events_default.into(),
+                                state_default: pl.state_default.into(),
+                                users_default: pl.users_default.into(),
+                                room_name: state(matrix_sdk::ruma::events::StateEventType::RoomName),
+                                room_avatar: state(matrix_sdk::ruma::events::StateEventType::RoomAvatar),
+                                room_topic: state(matrix_sdk::ruma::events::StateEventType::RoomTopic),
+                            };
+                            Cx::post_action(RoomPowerLevelsAction::Fetched {
+                                room_id,
+                                levels: snapshot,
+                            });
+                        }
+                        Err(e) => {
+                            Cx::post_action(RoomPowerLevelsAction::FetchFailed {
+                                room_id,
+                                error: e.to_string(),
+                            });
+                        }
+                    }
+                });
+            }
+
+            MatrixRequest::ApplyRoomPowerLevelChanges { room_id, changes } => {
+                let Some(client) = get_client() else { continue };
+                let _apply_pl_task = Handle::current().spawn(async move {
+                    let Some(room) = client.get_room(&room_id) else {
+                        Cx::post_action(RoomPowerLevelsAction::ApplyFailed {
+                            room_id: room_id.clone(),
+                            error: format!("Room {room_id} not found."),
+                        });
+                        return;
+                    };
+                    let sdk_changes = matrix_sdk::room::power_levels::RoomPowerLevelChanges {
+                        ban: changes.ban,
+                        invite: changes.invite,
+                        kick: changes.kick,
+                        redact: changes.redact,
+                        events_default: changes.events_default,
+                        state_default: changes.state_default,
+                        users_default: changes.users_default,
+                        room_name: changes.room_name,
+                        room_avatar: changes.room_avatar,
+                        room_topic: changes.room_topic,
+                        space_child: None,
+                    };
+                    log!("Applying room power level changes for {room_id}: {sdk_changes:?}");
+                    match room.apply_power_level_changes(sdk_changes).await {
+                        Ok(_) => {
+                            enqueue_popup_notification(
+                                "Updated room permissions.",
+                                PopupKind::Success,
+                                Some(3.0),
+                            );
+                            Cx::post_action(RoomPowerLevelsAction::Applied { room_id });
+                        }
+                        Err(e) => {
+                            enqueue_popup_notification(
+                                format!("Failed to update room permissions: {e}"),
+                                PopupKind::Error,
+                                None,
+                            );
+                            Cx::post_action(RoomPowerLevelsAction::ApplyFailed {
+                                room_id,
+                                error: e.to_string(),
+                            });
                         }
                     }
                 });
