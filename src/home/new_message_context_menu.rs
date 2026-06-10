@@ -3,7 +3,7 @@
 
 use bitflags::bitflags;
 use makepad_widgets::*;
-use matrix_sdk::ruma::{OwnedEventId, events::room::message::MessageType};
+use matrix_sdk::ruma::{OwnedEventId, OwnedUserId, events::room::message::MessageType};
 use matrix_sdk_ui::timeline::{EventTimelineItem, MsgLikeContent, TimelineEventItemId};
 
 use crate::{i18n::{AppLanguage, tr_key}, sliding_sync::UserPowerLevels};
@@ -297,6 +297,8 @@ pub struct MessageDetails {
     /// Whether this message should be highlighted, i.e.,
     /// if it mentions the room/current user or is a reply to the current user.
     pub should_be_highlighted: bool,
+    /// The user ID of the sender of this message.
+    pub sender_id: OwnedUserId,
     /// The abilities that the user has on this message.
     pub abilities: MessageAbilities,
 }

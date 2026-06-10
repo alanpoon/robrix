@@ -10560,6 +10560,7 @@ fn populate_message_view(
             has_html_body,
         ),
         should_be_highlighted: event_tl_item.is_highlighted() || has_room_mention,
+        sender_id: event_tl_item.sender().to_owned(),
     };
     let download_state = download_info.as_ref()
         .and_then(|info|
