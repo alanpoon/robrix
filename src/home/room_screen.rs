@@ -40,7 +40,7 @@ use crate::{
 #[allow(unused_imports)]
 use crate::home::report_content_modal::{
     ReportContentModal, ReportContentModalAction,
-    ReportContentModalWidgetRefExt, ReportContentResultAction,
+    ReportContentModalWidgetExt, ReportContentModalWidgetRefExt, ReportContentResultAction,
 };
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
 use crate::home::room_read_receipt::AvatarRowWidgetRefExt;
@@ -5130,17 +5130,20 @@ impl Widget for RoomScreen {
                 if let Some(RoomsListAction::Selected(selected_room)) = action.downcast_ref() {
                     if self.timeline_kind.as_ref() != selected_room.timeline_kind().as_ref() {
                         self.close_report_room_modal(cx);
+                        self.close_report_content_modal(cx);
                         self.close_leave_room_confirm_modal(cx);
                     }
                 }
                 if let Some(AppStateAction::RoomFocused(selected_room)) = action.downcast_ref() {
                     if self.timeline_kind.as_ref() != selected_room.timeline_kind().as_ref() {
                         self.close_report_room_modal(cx);
+                        self.close_report_content_modal(cx);
                         self.close_leave_room_confirm_modal(cx);
                     }
                 }
                 if let Some(AppStateAction::FocusNone) = action.downcast_ref() {
                     self.close_report_room_modal(cx);
+                    self.close_report_content_modal(cx);
                     self.close_leave_room_confirm_modal(cx);
                 }
 
@@ -5217,6 +5220,24 @@ impl Widget for RoomScreen {
                     if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
                         enqueue_popup_notification(
                             format!("Failed to report room.\n\nError: {error}"),
+                            PopupKind::Error,
+                            Some(5.0),
+                        );
+                    }
+                }
+                if let Some(ReportContentResultAction::Sent { room_id, .. }) = action.downcast_ref() {
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        enqueue_popup_notification(
+                            "Message reported successfully.",
+                            PopupKind::Success,
+                            Some(4.0),
+                        );
+                    }
+                }
+                if let Some(ReportContentResultAction::Failed { room_id, error, .. }) = action.downcast_ref() {
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        enqueue_popup_notification(
+                            format!("Failed to report message.\n\nError: {error}"),
                             PopupKind::Error,
                             Some(5.0),
                         );
@@ -5740,6 +5761,33 @@ impl Widget for RoomScreen {
                             reason: reason.clone(),
                         });
                         self.close_report_room_modal(cx);
+                        return false;
+                    }
+                    None => {}
+                }
+
+                match action.downcast_ref::<ReportContentModalAction>() {
+                    Some(ReportContentModalAction::Close) => {
+                        self.close_report_content_modal(cx);
+                        return false;
+                    }
+                    Some(ReportContentModalAction::Submit { event_id, reason, ignore_sender }) => {
+                        let Some(room_id) = self.room_id().cloned() else {
+                            self.close_report_content_modal(cx);
+                            return false;
+                        };
+                        submit_async_request(MatrixRequest::ReportContent {
+                            room_id: room_id.clone(),
+                            event_id: event_id.clone(),
+                            reason: reason.clone(),
+                        });
+                        if let Some(user_id) = ignore_sender.clone() {
+                            submit_async_request(MatrixRequest::IgnoreUserById {
+                                user_id,
+                                room_id,
+                            });
+                        }
+                        self.close_report_content_modal(cx);
                         return false;
                     }
                     None => {}
@@ -6541,6 +6589,10 @@ impl RoomScreen {
         self.view.modal(cx, ids!(report_room_modal)).close(cx);
     }
 
+    fn close_report_content_modal(&self, cx: &mut Cx) {
+        self.view.modal(cx, ids!(report_content_modal)).close(cx);
+    }
+
     fn close_leave_room_confirm_modal(&self, cx: &mut Cx) {
         self.view.modal(cx, ids!(leave_room_confirm_modal)).close(cx);
     }
@@ -6577,6 +6629,15 @@ impl RoomScreen {
         self.view.modal(cx, ids!(report_room_modal)).open(cx);
     }
 
+    fn open_report_content_modal(&mut self, cx: &mut Cx, details: &MessageDetails) {
+        let Some(event_id) = details.event_id().cloned() else { return };
+        let sender_id = details.sender_id.clone();
+        self.view
+            .report_content_modal(cx, ids!(report_content_modal_inner))
+            .show(cx, event_id, sender_id);
+        self.view.modal(cx, ids!(report_content_modal)).open(cx);
+    }
+
     fn open_leave_room_confirm_modal(&mut self, cx: &mut Cx) {
         let Some(room_name_id) = self.room_name_id.as_ref() else {
             return;
@@ -6598,6 +6659,7 @@ impl RoomScreen {
         self.close_create_bot_modal(cx);
         self.close_delete_bot_modal(cx);
         self.close_report_room_modal(cx);
+        self.close_report_content_modal(cx);
         self.close_leave_room_confirm_modal(cx);
     }
 
