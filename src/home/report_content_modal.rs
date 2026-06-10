@@ -209,6 +209,8 @@ impl WidgetMatchEvent for ReportContentModal {
             } else {
                 None
             };
+            self.view.button(cx, ids!(buttons.report_button)).set_enabled(cx, false);
+            self.view.button(cx, ids!(buttons.cancel_button)).set_enabled(cx, false);
             cx.action(ReportContentModalAction::Submit { event_id, reason, ignore_sender });
         }
     }
