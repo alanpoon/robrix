@@ -37,6 +37,11 @@ use crate::{
     },
     sliding_sync::{BackwardsPaginateUntilEventRequest, FetchedRoomThread, MatrixRequest, PaginationDirection, RoomThreadsAction, SearchMessagesResultAction, SearchedMessage, TimelineEndpoints, TimelineKind, TimelineRequestSender, UserPowerLevels, current_user_id, get_client, submit_async_request, take_timeline_endpoints}, utils::{self, ImageFormat, MEDIA_THUMBNAIL_FORMAT, RoomNameId, unix_time_millis_to_datetime}
 };
+#[allow(unused_imports)]
+use crate::home::report_content_modal::{
+    ReportContentModal, ReportContentModalAction,
+    ReportContentModalWidgetRefExt, ReportContentResultAction,
+};
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
 use crate::home::room_read_receipt::AvatarRowWidgetRefExt;
 use crate::home::search_messages::{
@@ -3908,6 +3913,12 @@ script_mod! {
             report_room_modal := Modal {
                 content +: {
                     report_room_modal_inner := mod.widgets.ReportRoomModal {}
+                }
+            }
+
+            report_content_modal := Modal {
+                content +: {
+                    report_content_modal_inner := mod.widgets.ReportContentModal {}
                 }
             }
 
@@ -8031,10 +8042,6 @@ impl RoomScreen {
                     };
                     cx.action(ConfirmDeleteAction::Show(RefCell::new(Some(content))));
                 }
-                // MessageAction::Report(details) => {
-                //     // TODO
-                // }
-
                 MessageAction::DownloadAttachment(info) => {
                     let Some(tl) = self.tl_state.as_mut() else { continue };
                     let mxc_uri = media_source_mxc(&info.media_source).clone();
@@ -8061,8 +8068,9 @@ impl RoomScreen {
                 // This isn't yet handled, as we need to completely redesign it.
                 MessageAction::ActionBarClose => { }
                 MessageAction::ToggleAppServiceActions => { }
-                // TODO: handle the report action (e.g., show a confirmation dialog).
-                MessageAction::Report(..) => { }
+                MessageAction::Report(details) => {
+                    self.open_report_content_modal(cx, &details);
+                }
                 MessageAction::None => { }
             }
         }
