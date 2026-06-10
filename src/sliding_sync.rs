@@ -48,7 +48,7 @@ use hashbrown::{HashMap, HashSet};
 use crate::{
     account_manager::{self, Account},
     app::{AppStateAction, RoomFilterRemoteSearchAction}, app_data_dir, avatar_cache::AvatarUpdate, event_preview::{BeforeText, TextPreview, text_preview_of_raw_timeline_event, text_preview_of_timeline_item}, home::{
-        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, room_screen::{ActionResponseResultAction, InviteResultAction, ReportRoomResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
+        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, report_content_modal::ReportContentResultAction, room_screen::{ActionResponseResultAction, InviteResultAction, ReportRoomResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
     }, homeserver::{CapabilityProbeAction, HsCapabilities, IdentityProviderSummary}, login::login_screen::LoginAction, logout::{logout_confirm_modal::LogoutAction, logout_state_machine::{LogoutConfig, is_logout_in_progress, logout_with_state_machine}}, room_preview_cache::{enqueue_room_preview_update, RoomPreviewUpdate}, media_cache::{MediaCacheEntry, MediaCacheEntryRef}, persistence::{self, ClientSessionPersisted, load_app_state, take_skip_app_state_restore_once}, profile::{
         user_profile::UserProfile,
         user_profile_cache::{UserProfileUpdate, enqueue_user_profile_update},
@@ -1179,6 +1179,17 @@ pub enum MatrixRequest {
     ReportRoom {
         room_id: OwnedRoomId,
         reason: String,
+    },
+    /// Request to report a specific message/event in a room.
+    ReportContent {
+        room_id: OwnedRoomId,
+        event_id: OwnedEventId,
+        reason: String,
+    },
+    /// Request to ignore a user by their user ID (without needing their RoomMember object).
+    IgnoreUserById {
+        user_id: OwnedUserId,
+        room_id: OwnedRoomId,
     },
     /// Request to get the actual list of members in a room.
     ///
@@ -3119,6 +3130,62 @@ async fn matrix_worker_task(
                         }
                     };
                     Cx::post_action(result_action);
+                });
+            }
+
+            MatrixRequest::ReportContent { room_id, event_id, reason } => {
+                let Some(client) = get_client() else { continue };
+                let _report_content_task = Handle::current().spawn(async move {
+                    log!("Sending request to report event {event_id} in room {room_id}...");
+                    let result = if let Some(room) = client.get_room(&room_id) {
+                        match room.report_content(event_id.clone(), Some(reason)).await {
+                            Ok(_) => ReportContentResultAction::Sent { room_id, event_id },
+                            Err(e) => {
+                                error!("Error reporting event {event_id} in room {room_id}: {e:?}");
+                                ReportContentResultAction::Failed { room_id, event_id, error: e }
+                            }
+                        }
+                    } else {
+                        ReportContentResultAction::Failed {
+                            room_id,
+                            event_id,
+                            error: matrix_sdk::Error::UnknownError(
+                                "Client couldn't locate room to report content.".into()
+                            ),
+                        }
+                    };
+                    Cx::post_action(result);
+                });
+            }
+
+            MatrixRequest::IgnoreUserById { user_id, room_id } => {
+                let Some(client) = get_client() else { continue };
+                let _ignore_task = Handle::current().spawn(async move {
+                    log!("Sending request to ignore user {user_id}...");
+                    let result = if let Some(room) = client.get_room(&room_id) {
+                        match room.get_member(&user_id).await {
+                            Ok(Some(member)) => member.ignore().await,
+                            Ok(None) => Err(matrix_sdk::Error::UnknownError(
+                                format!("User {user_id} not found in room {room_id}").into()
+                            )),
+                            Err(e) => Err(e),
+                        }
+                    } else {
+                        Err(matrix_sdk::Error::UnknownError(
+                            format!("Room {room_id} not found").into()
+                        ))
+                    };
+                    if let Err(e) = result {
+                        error!("Error ignoring user {user_id}: {e:?}");
+                        return;
+                    }
+                    log!("Successfully ignored user {user_id}.");
+                    // Re-paginate the room so ignored messages are hidden.
+                    submit_async_request(MatrixRequest::PaginateTimeline {
+                        timeline_kind: TimelineKind::MainRoom { room_id },
+                        num_events: 50,
+                        direction: PaginationDirection::Backwards,
+                    });
                 });
             }
 
