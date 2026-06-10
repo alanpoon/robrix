@@ -219,7 +219,7 @@ bitflags! {
     ///
     /// This is used to determine which buttons to show in the message context menu.
     #[derive(Copy, Clone, Debug)]
-    pub struct MessageAbilities: u8 {
+    pub struct MessageAbilities: u16 {
         /// Whether the user can react to this message.
         const CanReact = 1 << 0;
         /// Whether the user can reply to this message.
@@ -238,6 +238,8 @@ bitflags! {
         const HasHtml = 1 << 6;
         /// Whether this message can be forwarded to another room.
         const CanForward = 1 << 7;
+        /// Whether the user can report this message (i.e., it is not their own).
+        const CanReport = 1 << 8;
     }
 }
 impl MessageAbilities {
@@ -265,6 +267,7 @@ impl MessageAbilities {
         abilities.set(Self::CanReact, user_power_levels.can_send_reaction());
         abilities.set(Self::HasHtml, has_html);
         abilities.set(Self::CanForward, is_forwardable_message_content(message));
+        abilities.set(Self::CanReport, !event_tl_item.is_own());
         abilities
     }
 
