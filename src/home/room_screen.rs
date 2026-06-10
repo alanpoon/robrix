@@ -8156,7 +8156,7 @@ impl RoomScreen {
                 MessageAction::ActionBarClose => { }
                 MessageAction::ToggleAppServiceActions => { }
                 MessageAction::Report(details) => {
-                    self.open_report_content_modal(cx, &details);
+                    self.open_report_content_modal(cx, details);
                 }
                 MessageAction::None => { }
             }
