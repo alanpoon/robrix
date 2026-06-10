@@ -11,6 +11,7 @@ pub mod encryption_notice;
 pub mod event_source_modal;
 pub mod home_screen;
 pub mod sticker_modal;
+pub mod report_content_modal;
 pub mod invite_modal;
 pub mod invite_screen;
 pub mod light_themed_dock;
@@ -110,6 +111,7 @@ pub fn script_mod(vm: &mut ScriptVm) {
     new_message_context_menu::script_mod(vm);
     event_source_modal::script_mod(vm);
     sticker_modal::script_mod(vm);
+    report_content_modal::script_mod(vm);
     room_context_menu::script_mod(vm);
     room_settings_modal::script_mod(vm);
     invite_modal::script_mod(vm);
