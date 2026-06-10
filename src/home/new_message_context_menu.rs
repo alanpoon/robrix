@@ -175,22 +175,18 @@ script_mod! {
                 width: Fill,
             }
 
-            // report_button = ContextMenuButton {
-            //     draw_icon +: {
-            //         svg: (ICON_TRASH) // TODO: ICON_REPORT/WARNING/FLAG
-            //         color: (COLOR_FG_DANGER_RED),
-            //     }
-            //     icon_walk +: { margin: Inset{left: -2, right: 3} }
-            //
-            //     draw_bg +: {
-            //         border_color: (COLOR_FG_DANGER_RED),
-            //         color: (COLOR_BG_DANGER_RED)
-            //     }
-            //     text: "Report"
-            //     draw_text +: {
-            //         color: (COLOR_FG_DANGER_RED),
-            //     }
-            // }
+            report_button := mod.widgets.NewMessageContextMenuButton {
+                draw_icon +: {
+                    svg: (ICON_WARNING)
+                    color: (COLOR_FG_DANGER_RED),
+                }
+                draw_bg +: {
+                    border_color: (COLOR_FG_DANGER_RED),
+                    color: (COLOR_BG_DANGER_RED)
+                }
+                draw_text.color: (COLOR_FG_DANGER_RED),
+                text: "Report"
+            }
 
             // Note: we don't yet support deleting others' messages via admin/moderator power levels.
             //       For now we only consider whether its the user's own message.
@@ -490,18 +486,13 @@ impl WidgetMatchEvent for NewMessageContextMenu {
             );
             close_menu = true;
         }
-        // else if self.button(cx, ids!(report_button)).clicked(actions) {
-        //     cx.widget_action(
-        //         details.room_screen_widget_uid,
-        //         &scope.path,
-        //         // TODO: display a dialog to confirm the report reason.
-        //         MessageAction::Report {
-        //             event_id: details.event_id.clone(),
-        //             item_id: details.item_id,
-        //         },
-        //     );
-        //    close_menu = true;
-        // }
+        else if self.button(cx, ids!(report_button)).clicked(actions) {
+            cx.widget_action(
+                details.room_screen_widget_uid,
+                MessageAction::Report(details.clone()),
+            );
+            close_menu = true;
+        }
         else if self.button(cx, ids!(delete_button)).clicked(actions) {
             cx.widget_action(
                 details.room_screen_widget_uid, 
@@ -586,7 +577,6 @@ impl NewMessageContextMenu {
         let forward_message_button = self.view.button(cx, ids!(forward_message_button));
         let view_source_button = self.view.button(cx, ids!(view_source_button));
         let jump_to_related_button = self.view.button(cx, ids!(jump_to_related_button));
-        // let report_button = self.view.button(cx, ids!(report_button));
         let delete_button = self.view.button(cx, ids!(delete_button));
 
         // Determine which buttons should be shown.
@@ -604,9 +594,9 @@ impl NewMessageContextMenu {
         let show_forward = details.abilities.contains(MessageAbilities::CanForward);
         let show_view_source = true;
         let show_jump_to_related = details.related_event_id.is_some();
-        // let show_report = true;
+        let show_report = details.abilities.contains(MessageAbilities::CanReport);
         let show_delete = details.abilities.contains(MessageAbilities::CanDelete);
-        let show_divider_before_report_delete = show_delete; // || show_report;
+        let show_divider_before_report_delete = show_delete || show_report;
 
         // Actually set the buttons' visibility.
         self.view.view(cx, ids!(react_view)).set_visible(cx, show_react);
@@ -634,7 +624,7 @@ impl NewMessageContextMenu {
         forward_message_button.set_visible(cx, show_forward);
         jump_to_related_button.set_visible(cx, show_jump_to_related);
         self.view.view(cx, ids!(divider_before_report_delete)).set_visible(cx, show_divider_before_report_delete);
-        // report_button.set_visible(cx, show_report);
+        self.view.button(cx, ids!(report_button)).set_visible(cx, show_report);
         delete_button.set_visible(cx, show_delete);
 
         // Reset the hover state of each button.
@@ -649,7 +639,7 @@ impl NewMessageContextMenu {
         forward_message_button.reset_hover(cx);
         view_source_button.reset_hover(cx);
         jump_to_related_button.reset_hover(cx);
-        // report_button.reset_hover(cx);
+        self.view.button(cx, ids!(report_button)).reset_hover(cx);
         delete_button.reset_hover(cx);
 
         // Reset reaction input view stuff.
@@ -670,7 +660,7 @@ impl NewMessageContextMenu {
             + show_forward as u8
             + show_view_source as u8
             + show_jump_to_related as u8
-            // + show_report as u8
+            + show_report as u8
             + show_delete as u8;
 
         // Calculate and return the total expected height:

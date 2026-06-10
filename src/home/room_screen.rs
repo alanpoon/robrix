@@ -8061,6 +8061,8 @@ impl RoomScreen {
                 // This isn't yet handled, as we need to completely redesign it.
                 MessageAction::ActionBarClose => { }
                 MessageAction::ToggleAppServiceActions => { }
+                // TODO: handle the report action (e.g., show a confirmation dialog).
+                MessageAction::Report(..) => { }
                 MessageAction::None => { }
             }
         }
@@ -12084,8 +12086,8 @@ pub enum MessageAction {
         reason: Option<String>,
     },
 
-    // /// The user clicked the "report" button on a message.
-    // Report(MessageDetails),
+    /// The user clicked the "report" button on a message.
+    Report(MessageDetails),
 
     /// The user clicked the "Download" button on a media/file message.
     DownloadAttachment(DownloadableAttachment),
