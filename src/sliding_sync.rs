@@ -3180,6 +3180,15 @@ async fn matrix_worker_task(
                         return;
                     }
                     log!("Successfully ignored user {user_id}.");
+                    // Re-acquire the RoomMember object and push an update to the profile cache.
+                    if let Some(room) = client.get_room(&room_id) {
+                        if let Ok(Some(new_room_member)) = room.get_member(&user_id).await {
+                            enqueue_user_profile_update(UserProfileUpdate::RoomMemberOnly {
+                                room_id: room_id.clone(),
+                                room_member: new_room_member,
+                            });
+                        }
+                    }
                     // Re-paginate the room so ignored messages are hidden.
                     submit_async_request(MatrixRequest::PaginateTimeline {
                         timeline_kind: TimelineKind::MainRoom { room_id },
