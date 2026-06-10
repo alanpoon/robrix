@@ -121,7 +121,7 @@ pub enum PinnedMessagesPanelAction {
 #[derive(Clone, Debug)]
 pub enum PinnedMessagesFetchResult {
     Fetched { room_id: OwnedRoomId, items: Vec<PinnedEventContent> },
-    Failed { room_id: OwnedRoomId, error: matrix_sdk::Error },
+    Failed { room_id: OwnedRoomId, error: String },
 }
 
 #[derive(Script, ScriptHook, Widget, Animator)]
@@ -249,8 +249,4 @@ impl PinnedMessagesPanelRef {
         let Some(mut inner) = self.borrow_mut() else { return };
         inner.hide(cx);
     }
-}
-
-pub fn script_mod(vm: &mut ScriptVm) {
-    PinnedMessagesPanel::register_widget(vm);
 }

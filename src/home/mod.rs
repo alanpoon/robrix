@@ -12,6 +12,7 @@ pub mod event_source_modal;
 pub mod home_screen;
 pub mod sticker_modal;
 pub mod report_content_modal;
+pub mod pinned_messages_panel;
 pub mod invite_modal;
 pub mod invite_screen;
 pub mod light_themed_dock;
@@ -117,6 +118,7 @@ pub fn script_mod(vm: &mut ScriptVm) {
     invite_modal::script_mod(vm);
     invite_screen::script_mod(vm);
     tombstone_footer::script_mod(vm);
+    pinned_messages_panel::script_mod(vm);
     room_screen::script_mod(vm);
     rooms_sidebar::script_mod(vm);
     welcome_screen::script_mod(vm);
