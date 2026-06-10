@@ -42,6 +42,9 @@ use crate::home::report_content_modal::{
     ReportContentModal, ReportContentModalAction,
     ReportContentModalWidgetExt, ReportContentModalWidgetRefExt, ReportContentResultAction,
 };
+use crate::home::pinned_messages_panel::{
+    PinnedMessagesFetchResult, PinnedMessagesPanelAction, PinnedMessagesPanelWidgetExt,
+};
 use crate::home::event_reaction_list::ReactionListWidgetRefExt;
 use crate::home::room_read_receipt::AvatarRowWidgetRefExt;
 use crate::home::search_messages::{
@@ -3889,6 +3892,7 @@ script_mod! {
 
             threads_sliding_pane := mod.widgets.ThreadsSlidingPane { }
             room_info_sliding_pane := mod.widgets.RoomInfoSlidingPane { }
+            pinned_messages_panel := mod.widgets.PinnedMessagesPanel { }
 
             // The user profile sliding pane should be displayed on top of other "static" subviews
             // (on top of all other views that are always visible).
@@ -5132,6 +5136,7 @@ impl Widget for RoomScreen {
                         self.close_report_room_modal(cx);
                         self.close_report_content_modal(cx);
                         self.close_leave_room_confirm_modal(cx);
+                        self.hide_pinned_messages_panel(cx);
                     }
                 }
                 if let Some(AppStateAction::RoomFocused(selected_room)) = action.downcast_ref() {
@@ -5139,12 +5144,14 @@ impl Widget for RoomScreen {
                         self.close_report_room_modal(cx);
                         self.close_report_content_modal(cx);
                         self.close_leave_room_confirm_modal(cx);
+                        self.hide_pinned_messages_panel(cx);
                     }
                 }
                 if let Some(AppStateAction::FocusNone) = action.downcast_ref() {
                     self.close_report_room_modal(cx);
                     self.close_report_content_modal(cx);
                     self.close_leave_room_confirm_modal(cx);
+                    self.hide_pinned_messages_panel(cx);
                 }
 
                 // Handle actions related to restoring the previously-saved state of rooms.
@@ -5238,6 +5245,23 @@ impl Widget for RoomScreen {
                     if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
                         enqueue_popup_notification(
                             format!("Failed to report message.\n\nError: {error}"),
+                            PopupKind::Error,
+                            Some(5.0),
+                        );
+                    }
+                }
+                if let Some(PinnedMessagesPanelAction::Open) = action.downcast_ref() {
+                    self.open_pinned_messages_panel(cx);
+                }
+                if let Some(PinnedMessagesFetchResult::Fetched { room_id, items }) = action.downcast_ref() {
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        self.pinned_messages_panel(cx, ids!(pinned_messages_panel)).show(cx, items.clone());
+                    }
+                }
+                if let Some(PinnedMessagesFetchResult::Failed { room_id, error }) = action.downcast_ref() {
+                    if self.room_name_id.as_ref().is_some_and(|rn| rn.room_id() == room_id) {
+                        enqueue_popup_notification(
+                            format!("Failed to fetch pinned messages.\n\nError: {error}"),
                             PopupKind::Error,
                             Some(5.0),
                         );
@@ -6661,6 +6685,7 @@ impl RoomScreen {
         self.close_report_room_modal(cx);
         self.close_report_content_modal(cx);
         self.close_leave_room_confirm_modal(cx);
+        self.hide_pinned_messages_panel(cx);
     }
 
     fn resolved_app_service_bot_user_id(
@@ -8702,6 +8727,21 @@ impl RoomScreen {
 
     fn hide_room_info_pane(&mut self, cx: &mut Cx) {
         self.room_info_sliding_pane(cx, ids!(room_info_sliding_pane)).hide(cx);
+    }
+
+    fn open_pinned_messages_panel(&mut self, cx: &mut Cx) {
+        let Some(room_id) = self.room_id().cloned() else { return };
+        let event_ids = self.pinned_events.clone();
+        if event_ids.is_empty() {
+            self.pinned_messages_panel(cx, ids!(pinned_messages_panel)).show(cx, vec![]);
+        } else {
+            use crate::sliding_sync::{MatrixRequest, submit_async_request};
+            submit_async_request(MatrixRequest::FetchPinnedMessageContent { room_id, event_ids });
+        }
+    }
+
+    fn hide_pinned_messages_panel(&mut self, cx: &mut Cx) {
+        self.pinned_messages_panel(cx, ids!(pinned_messages_panel)).hide(cx);
     }
 
     fn ensure_threads_state_for_current_room(&mut self) {

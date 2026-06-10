@@ -7,6 +7,63 @@ script_mod! {
     use mod.prelude.widgets.*
     use mod.widgets.*
 
+    mod.widgets.PinnedMessageEntry = #(PinnedMessageEntry::register_widget(vm)) {
+        ..mod.widgets.RoundedView
+
+        width: Fill
+        height: Fit
+        flow: Down
+        spacing: 5
+        padding: Inset{top: 12, right: 12, bottom: 12, left: 12}
+        margin: Inset{left: 12, right: 12, top: 6, bottom: 0}
+
+        show_bg: true
+        draw_bg +: {
+            color: #F8FAFD
+            border_radius: 4.0
+            border_size: 1.0
+            border_color: #D8E0EA
+        }
+
+        title_row := View {
+            width: Fill
+            height: Fit
+            flow: Right
+            spacing: 8
+
+            sender := Label {
+                width: Fill
+                height: Fit
+                draw_text +: {
+                    text_style: USERNAME_TEXT_STYLE { font_size: 10.0 }
+                    color: #444
+                }
+                text: ""
+            }
+
+            time := Label {
+                width: Fit
+                height: Fit
+                draw_text +: {
+                    text_style: TIMESTAMP_TEXT_STYLE { font_size: 7.5 }
+                    color: (TIMESTAMP_TEXT_COLOR)
+                }
+                text: ""
+            }
+        }
+
+        body := Label {
+            width: Fill
+            height: Fit
+            flow: Flow.Right{wrap: true}
+            draw_text +: {
+                text_style: MESSAGE_TEXT_STYLE { font_size: 9.8 }
+                color: #7B7B7B
+            }
+            text: ""
+        }
+    }
+
     mod.widgets.PinnedMessagesPanel = #(PinnedMessagesPanel::register_widget(vm)) {
         visible: false,
         flow: Overlay,
@@ -52,28 +109,27 @@ script_mod! {
                 }
             }
 
-            content_scroll := ScrollYView {
-                width: Fill, height: Fill,
+            empty_label := Label {
+                visible: false,
+                width: Fill, height: Fit,
+                flow: Flow.Right{wrap: true}
+                padding: Inset{left: 15, right: 15, top: 20, bottom: 20}
+                draw_text +: {
+                    text_style: MESSAGE_TEXT_STYLE { font_size: 10.5 }
+                    color: #7B7B7B
+                }
+                text: "No pinned messages in this room."
+            }
+
+            items_list := PortalList {
+                visible: false,
+                width: Fill,
+                height: Fill,
                 flow: Down,
-                padding: Inset{left: 12, right: 12, top: 8, bottom: 12}
+                max_pull_down: 0.0,
+                padding: Inset{top: 6, bottom: 12}
 
-                empty_label := Label {
-                    visible: false,
-                    width: Fill, height: Fit,
-                    draw_text +: { color: #888, text_style: REGULAR_TEXT { font_size: 11.0 } }
-                    text: "No pinned messages in this room."
-                }
-
-                items_content := Label {
-                    visible: false,
-                    width: Fill, height: Fit,
-                    draw_text +: {
-                        wrap: Word,
-                        color: #333,
-                        text_style: REGULAR_TEXT { font_size: 10.5 }
-                    }
-                    text: ""
-                }
+                PinnedEntry := mod.widgets.PinnedMessageEntry {}
             }
         }
 
@@ -124,6 +180,44 @@ pub enum PinnedMessagesFetchResult {
     Failed { room_id: OwnedRoomId, error: String },
 }
 
+#[derive(Script, ScriptHook, Widget)]
+pub struct PinnedMessageEntry {
+    #[source] source: ScriptObjectRef,
+    #[deref] view: View,
+}
+
+impl Widget for PinnedMessageEntry {
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+    }
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        self.view.draw_walk(cx, scope, walk)
+    }
+}
+
+impl PinnedMessageEntry {
+    fn set_entry(&mut self, cx: &mut Cx, item: &PinnedEventContent) {
+        let sender = item.display_name.as_deref()
+            .unwrap_or_else(|| item.sender_id.localpart());
+        let ts = crate::utils::relative_format(item.timestamp).unwrap_or_default();
+        let body = if item.body.chars().count() > 200 {
+            format!("{}…", item.body.chars().take(200).collect::<String>())
+        } else {
+            item.body.clone()
+        };
+        self.label(cx, ids!(title_row.sender)).set_text(cx, sender);
+        self.label(cx, ids!(title_row.time)).set_text(cx, &ts);
+        self.label(cx, ids!(body)).set_text(cx, &body);
+    }
+}
+
+impl PinnedMessageEntryRef {
+    fn set_entry(&self, cx: &mut Cx, item: &PinnedEventContent) {
+        let Some(mut inner) = self.borrow_mut() else { return };
+        inner.set_entry(cx, item);
+    }
+}
+
 #[derive(Script, ScriptHook, Widget, Animator)]
 pub struct PinnedMessagesPanel {
     #[deref] view: View,
@@ -146,30 +240,23 @@ impl Widget for PinnedMessagesPanel {
         script_apply_eval!(cx, bg_view, { draw_bg +: { color: #(bg_color) } });
 
         let has_items = !self.items.is_empty();
-        self.view(cx, ids!(content_scroll.empty_label)).set_visible(cx, !has_items);
-        self.view(cx, ids!(content_scroll.items_content)).set_visible(cx, has_items);
+        self.label(cx, ids!(empty_label)).set_visible(cx, !has_items);
+        self.view(cx, ids!(items_list)).set_visible(cx, has_items);
 
-        if has_items {
-            let text = self.items.iter().enumerate().map(|(i, item)| {
-                let sender = item.display_name.as_deref()
-                    .unwrap_or_else(|| item.sender_id.localpart());
-                let ts = crate::utils::relative_format(item.timestamp)
-                    .unwrap_or_default();
-                let body = if item.body.chars().count() > 200 {
-                    format!("{}…", item.body.chars().take(200).collect::<String>())
-                } else {
-                    item.body.clone()
-                };
-                if i == 0 {
-                    format!("{sender}  {ts}\n{body}")
-                } else {
-                    format!("{sender}  {ts}\n{body}")
-                }
-            }).collect::<Vec<_>>().join("\n\n");
-            self.label(cx, ids!(content_scroll.items_content)).set_text(cx, &text);
+        let item_count = self.items.len();
+        while let Some(widget) = self.view.draw_walk(cx, scope, walk).step() {
+            let portal_list_ref = widget.as_portal_list();
+            let Some(mut list) = portal_list_ref.borrow_mut() else { continue };
+
+            list.set_item_range(cx, 0, item_count);
+            while let Some(item_id) = list.next_visible_item(cx) {
+                let Some(item_data) = self.items.get(item_id) else { continue };
+                let item = list.item(cx, item_id, id!(PinnedEntry));
+                item.as_pinned_message_entry().set_entry(cx, item_data);
+                item.draw_all(cx, &mut Scope::empty());
+            }
         }
-
-        self.view.draw_walk(cx, scope, walk)
+        DrawStep::done()
     }
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {

@@ -48,7 +48,7 @@ use hashbrown::{HashMap, HashSet};
 use crate::{
     account_manager::{self, Account},
     app::{AppStateAction, RoomFilterRemoteSearchAction}, app_data_dir, avatar_cache::AvatarUpdate, event_preview::{BeforeText, TextPreview, text_preview_of_raw_timeline_event, text_preview_of_timeline_item}, home::{
-        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, report_content_modal::ReportContentResultAction, room_screen::{ActionResponseResultAction, InviteResultAction, ReportRoomResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
+        add_room::{CreatableSpacesAction, CreateRoomAction, CreateRoomContext, KnockResultAction}, invite_screen::{JoinRoomResultAction, LeaveRoomResultAction}, link_preview::{LinkPreviewData, LinkPreviewDataNonNumeric, LinkPreviewRateLimitResponse}, pinned_messages_panel::{PinnedEventContent, PinnedMessagesFetchResult}, report_content_modal::ReportContentResultAction, room_screen::{ActionResponseResultAction, InviteResultAction, ReportRoomResultAction, TimelineUpdate}, rooms_list::{self, InvitedRoomInfo, InviterInfo, JoinedRoomInfo, RoomsListUpdate, build_room_search_text, enqueue_rooms_list_update}, rooms_list_header::RoomsListHeaderAction, tombstone_footer::SuccessorRoomDetails
     }, homeserver::{CapabilityProbeAction, HsCapabilities, IdentityProviderSummary}, login::login_screen::LoginAction, logout::{logout_confirm_modal::LogoutAction, logout_state_machine::{LogoutConfig, is_logout_in_progress, logout_with_state_machine}}, room_preview_cache::{enqueue_room_preview_update, RoomPreviewUpdate}, media_cache::{MediaCacheEntry, MediaCacheEntryRef}, persistence::{self, ClientSessionPersisted, load_app_state, take_skip_app_state_restore_once}, profile::{
         user_profile::UserProfile,
         user_profile_cache::{UserProfileUpdate, enqueue_user_profile_update},
@@ -1190,6 +1190,11 @@ pub enum MatrixRequest {
     IgnoreUserById {
         user_id: OwnedUserId,
         room_id: OwnedRoomId,
+    },
+    /// Request to fetch the content of pinned messages in a room.
+    FetchPinnedMessageContent {
+        room_id: OwnedRoomId,
+        event_ids: Vec<OwnedEventId>,
     },
     /// Request to get the actual list of members in a room.
     ///
@@ -3195,6 +3200,52 @@ async fn matrix_worker_task(
                         num_events: 50,
                         direction: PaginationDirection::Backwards,
                     });
+                });
+            }
+
+            MatrixRequest::FetchPinnedMessageContent { room_id, event_ids } => {
+                let Some(client) = get_client() else { continue };
+                let _fetch_task = Handle::current().spawn(async move {
+                    let Some(room) = client.get_room(&room_id) else {
+                        Cx::post_action(PinnedMessagesFetchResult::Failed {
+                            room_id,
+                            error: "Room not found".to_string(),
+                        });
+                        return;
+                    };
+                    let mut items = Vec::new();
+                    for event_id in &event_ids {
+                        let timeline_event = match room.load_or_fetch_event(event_id, None).await {
+                            Ok(ev) => ev,
+                            Err(e) => {
+                                warning!("Failed to fetch pinned event {event_id}: {e:?}");
+                                continue;
+                            }
+                        };
+                        let raw = timeline_event.raw();
+                        let sender_id = match raw.get_field::<OwnedUserId>("sender").ok().flatten() {
+                            Some(id) => id,
+                            None => continue,
+                        };
+                        let timestamp = timeline_event.timestamp()
+                            .unwrap_or_else(MilliSecondsSinceUnixEpoch::now);
+                        let display_name = room.get_member_no_sync(&sender_id).await
+                            .ok()
+                            .flatten()
+                            .and_then(|m| m.display_name().map(str::to_string));
+                        let sender_name = display_name.as_deref().unwrap_or(sender_id.as_str());
+                        let body = text_preview_of_raw_timeline_event(raw, sender_name)
+                            .map(|p| p.format_with(sender_name, false))
+                            .unwrap_or_else(|| format!("[event {}]", event_id));
+                        items.push(PinnedEventContent {
+                            event_id: event_id.clone(),
+                            sender_id,
+                            display_name,
+                            body,
+                            timestamp,
+                        });
+                    }
+                    Cx::post_action(PinnedMessagesFetchResult::Fetched { room_id, items });
                 });
             }
 
