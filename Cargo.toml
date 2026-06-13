@@ -37,6 +37,7 @@ eyeball = { version = "0.8.8", features = ["tracing"] } # same as matrix-sdk-ui
 eyeball-im = { version = "0.8.0", features = [ "tracing" ] } # same as matrix-sdk-ui
 imbl = { version = "6.1.0", features = ["serde"] } # same as matrix-sdk-ui
 futures-util = "0.3"
+reqwest-eventsource = "0.6"
 hashbrown = { version = "0.16", features = ["raw-entry"] }
 htmlize = "1.0.5"
 indexmap = "2.6.0"
