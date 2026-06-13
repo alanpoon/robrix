@@ -5277,8 +5277,8 @@ async fn matrix_worker_task(
 
             MatrixRequest::FetchSse { timeline_kind, event_id, url } => {
                 let _fetch_sse_task = Handle::current().spawn(async move {
+                    use eventsource_stream::Eventsource;
                     use futures_util::StreamExt;
-                    use reqwest_eventsource::{Event, EventSource};
 
                     log!("Starting SSE fetch for event {} from {}", event_id, url);
 
@@ -5287,19 +5287,21 @@ async fn matrix_worker_task(
                         return;
                     };
 
-                    let client = matrix_sdk::reqwest::Client::builder()
+                    let response = match matrix_sdk::reqwest::Client::builder()
                         .no_proxy()
                         .build()
-                        .unwrap_or_default();
-                    let request = client.get(&url);
-
-                    let mut es = match EventSource::new(request) {
-                        Ok(es) => es,
+                        .unwrap_or_default()
+                        .get(&url)
+                        .header("Accept", "text/event-stream")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
                         Err(e) => {
-                            error!("SSE: Failed to create EventSource for {}: {:?}", url, e);
+                            error!("SSE: Failed to connect to {}: {:?}", url, e);
                             let _ = update_sender.send(crate::home::room_screen::TimelineUpdate::SseContentUpdate {
                                 event_id,
-                                content: format!("Error creating EventSource: {:?}", e),
+                                content: format!("SSE connection error: {:?}", e),
                                 is_complete: true,
                             });
                             SignalToUI::set_ui_signal();
@@ -5309,13 +5311,11 @@ async fn matrix_worker_task(
 
                     log!("SSE: Connected to {}, waiting for events...", url);
                     let mut accumulated = String::new();
+                    let mut stream = response.bytes_stream().eventsource();
 
-                    while let Some(event) = es.next().await {
+                    while let Some(event) = stream.next().await {
                         match event {
-                            Ok(Event::Open) => {
-                                log!("SSE: Connection opened for event {}", event_id);
-                            }
-                            Ok(Event::Message(msg)) => {
+                            Ok(msg) => {
                                 log!("SSE: Event '{}': {}", msg.event, msg.data);
 
                                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&msg.data) {
@@ -5342,7 +5342,6 @@ async fn matrix_worker_task(
                                             is_complete: true,
                                         });
                                         SignalToUI::set_ui_signal();
-                                        es.close();
                                         return;
                                     }
                                 } else if !msg.data.is_empty() {

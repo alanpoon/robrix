@@ -10094,7 +10094,7 @@ fn populate_message_view(
                                 Some(link_preview_cache),
                                 sender_is_bot,
                             );
-                            return (item, false);
+                            return (item, new_drawn_status);
                         }
 
                         // Check if this message is being streamed
@@ -12684,6 +12684,29 @@ pub fn clear_timeline_states(_cx: &mut Cx) {
     TIMELINE_STATES.with_borrow_mut(|states| {
         states.clear();
     });
+}
+
+/// Parses an SSE header from a message body.
+///
+/// Expected format: `!SSE|<URL>|`
+/// Example: `!SSE|http://127.0.0.1:3000/events|`
+fn parse_sse_header(body: &str) -> Option<String> {
+    let trimmed = body.trim();
+    if trimmed.starts_with("!SSE|") {
+        if let Some(end_idx) = trimmed[5..].find('|') {
+            let url = &trimmed[5..5 + end_idx];
+            if !url.is_empty() {
+                return Some(url.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Submits a background request to fetch SSE content for the given event.
+fn start_sse_fetch(timeline_kind: TimelineKind, event_id: OwnedEventId, url: String) {
+    use crate::sliding_sync::{MatrixRequest, submit_async_request};
+    submit_async_request(MatrixRequest::FetchSse { timeline_kind, event_id, url });
 }
 
 #[cfg(test)]
